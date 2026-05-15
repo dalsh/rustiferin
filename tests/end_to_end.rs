@@ -1,0 +1,186 @@
+//! End-to-end integration tests covering the wiring of capture → pipeline → output.
+//!
+//! These exercise the real pipeline thread with [`FakeCapture`] feeding frames and
+//! [`FakeOutput`] subscribing to the `watch::Receiver<LedFrame>`, so no PipeWire,
+//! D-Bus, or MQTT is required.
+
+#![cfg(feature = "test-fakes")]
+
+mod helpers;
+
+use helpers::{
+    assert_color_near, identity_config, padded_solid_frame, run_e2e, solid_color_frame,
+    split_frame_bgra,
+};
+use rustiferin::config::schema::LedZone;
+
+#[tokio::test(flavor = "current_thread")]
+async fn identity_pipeline_preserves_color() {
+    let cfg = identity_config(
+        vec![LedZone {
+            x: 0,
+            y: 0,
+            w: 8,
+            h: 8,
+        }],
+        8,
+        8,
+    );
+    // BGRA red.
+    let frame = solid_color_frame(8, 8, 0, 0, 255);
+    let frames = run_e2e(cfg, vec![frame], 1).await;
+    assert!(
+        !frames.is_empty(),
+        "pipeline must publish at least one frame"
+    );
+    assert_color_near(
+        *frames.last().unwrap().colors.first().unwrap(),
+        (255, 0, 0),
+        0,
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn two_zone_split_frame_is_split_correctly() {
+    let cfg = identity_config(
+        vec![
+            LedZone {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 8,
+            },
+            LedZone {
+                x: 4,
+                y: 0,
+                w: 4,
+                h: 8,
+            },
+        ],
+        8,
+        8,
+    );
+    // Left half red, right half green.
+    let frame = split_frame_bgra(8, 8, (0, 0, 255), (0, 255, 0));
+    let frames = run_e2e(cfg, vec![frame], 1).await;
+    let last = frames.last().expect("at least one frame");
+    assert_eq!(last.colors.len(), 2);
+    assert_color_near(last.colors[0], (255, 0, 0), 0);
+    assert_color_near(last.colors[1], (0, 255, 0), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gamma_22_darkens_mid_gray() {
+    let mut cfg = identity_config(
+        vec![LedZone {
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 4,
+        }],
+        4,
+        4,
+    );
+    cfg.color.gamma = 2.2;
+    // BGRA mid-gray (128).
+    let frame = solid_color_frame(4, 4, 128, 128, 128);
+    let frames = run_e2e(cfg, vec![frame], 1).await;
+    // (128/255)^2.2 * 255 ≈ 55.5
+    let c = frames.last().unwrap().colors[0];
+    assert_color_near(c, (56, 56, 56), 1);
+    assert!(c.r < 128, "gamma 2.2 must darken midtones, got r={}", c.r);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ema_smoothing_converges_over_repeated_frames() {
+    let mut cfg = identity_config(
+        vec![LedZone {
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 4,
+        }],
+        4,
+        4,
+    );
+    cfg.smoothing.ema_alpha = 0.5;
+    let frames_in: Vec<_> = (0..20)
+        .map(|_| solid_color_frame(4, 4, 0, 0, 255))
+        .collect();
+    let observed = run_e2e(cfg, frames_in, 1).await;
+    // After many feeds of the same color with alpha=0.5 the EMA is within 1 LSB.
+    let last = observed.last().expect("at least one frame");
+    assert_color_near(last.colors[0], (255, 0, 0), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn brightness_limit_clamps_white() {
+    let mut cfg = identity_config(
+        vec![LedZone {
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 4,
+        }],
+        4,
+        4,
+    );
+    cfg.color.brightness_max = 128;
+    let frame = solid_color_frame(4, 4, 255, 255, 255);
+    let frames = run_e2e(cfg, vec![frame], 1).await;
+    let c = frames.last().unwrap().colors[0];
+    assert_color_near(c, (128, 128, 128), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stride_padded_frame_averages_correctly() {
+    let cfg = identity_config(
+        vec![LedZone {
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 4,
+        }],
+        4,
+        4,
+    );
+    // Stride pads 8 bytes per row past the pixel data; padding bytes are sentinel 0xFF.
+    let frame = padded_solid_frame(4, 4, 8, 50, 100, 150);
+    let frames = run_e2e(cfg, vec![frame], 1).await;
+    assert_color_near(frames.last().unwrap().colors[0], (150, 100, 50), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn upscaled_frame_against_reference_resolution_preserves_zone_split() {
+    // Reference is 1920×1080 with two left/right halves; the frame the pipeline
+    // actually sees is 3840×2160 (a 2× upscale). Zone bounds must rescale.
+    let cfg = identity_config(
+        vec![
+            LedZone {
+                x: 0,
+                y: 0,
+                w: 960,
+                h: 1080,
+            },
+            LedZone {
+                x: 960,
+                y: 0,
+                w: 960,
+                h: 1080,
+            },
+        ],
+        1920,
+        1080,
+    );
+    // 3840×2160 BGRA frame: left half red, right half green. Memory: ~32 MiB;
+    // FakeCapture copies it once into a pool buffer of capacity ~32 MiB (see
+    // `helpers::POOL_BUFFER_CAPACITY`).
+    let frame = split_frame_bgra(3840, 2160, (0, 0, 255), (0, 255, 0));
+    let frames = run_e2e(cfg, vec![frame], 1).await;
+    let last = frames.last().expect("at least one frame");
+    assert_eq!(last.colors.len(), 2);
+    // Allow a couple of LSB of tolerance, `scale_zone` rounds and the boundary
+    // between zones is on a pixel that could fall either side after rounding.
+    assert_color_near(last.colors[0], (255, 0, 0), 2);
+    assert_color_near(last.colors[1], (0, 255, 0), 2);
+}

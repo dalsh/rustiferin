@@ -1,0 +1,21 @@
+[Unit]
+Description=Rustiferin ambient lighting agent
+After=graphical-session.target
+PartOf=graphical-session.target
+Wants=pipewire.service
+
+# Cap restart storms: at most 3 restarts within 60s, then systemd gives up.
+StartLimitBurst=3
+StartLimitIntervalSec=60s
+
+[Service]
+Type=simple
+# Override RUSTIFERIN_BIN if the binary lives somewhere other than ~/.cargo/bin
+# (e.g. /usr/bin/rustiferin from a distro package).
+Environment=RUSTIFERIN_BIN=%h/.cargo/bin/rustiferin
+ExecStart=/bin/sh -c 'exec "$RUSTIFERIN_BIN"'
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: build + publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libpipewire-0.3-dev \
+            libdbus-1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked --features wayland,mqtt,tray
+
+      - name: Stage release artifacts
+        id: stage
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          stem="rustiferin-${tag}-x86_64-linux-gnu"
+          stage="dist-release/${stem}"
+          mkdir -p "${stage}"
+          strip target/release/rustiferin
+          cp target/release/rustiferin "${stage}/"
+          cp LICENSE README.md "${stage}/"
+          cp -r dist "${stage}/dist"
+          tarball="${stem}.tar.gz"
+          tar -C dist-release -czf "${tarball}" "${stem}"
+          sha256sum "${tarball}" > "${tarball}.sha256"
+          echo "tarball=${tarball}" >> "${GITHUB_OUTPUT}"
+          echo "checksum=${tarball}.sha256" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            ${{ steps.stage.outputs.tarball }}
+            ${{ steps.stage.outputs.checksum }}

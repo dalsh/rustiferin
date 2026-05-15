@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Rustiferin
+GenericName=Ambient Lighting Agent
+Comment=Drive a Glow Worm Luciferin LED strip from screen capture
+Exec=rustiferin
+Icon=preferences-desktop-display
+Terminal=false
+Categories=Utility;System;
+X-GNOME-Autostart-enabled=true
+StartupNotify=false

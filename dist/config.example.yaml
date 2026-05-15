@@ -1,0 +1,46 @@
+# Rustiferin example configuration.
+#
+# Copy this file to ~/.config/rustiferin/config.yaml and edit:
+# - mqtt.broker_url to point at your MQTT broker
+# - led_matrix.zones to describe your screen-to-strip layout
+#
+# Field reference: src/config/schema.rs
+
+general:
+  device_name: rustiferin
+
+mqtt:
+  broker_url: mqtt://10.0.0.10:1883
+  topic_base: lights/glowwormluciferin
+  # device_mac: AA:BB:CC:DD:EE:FF    # only needed for multi-device setups
+
+# Zones are rectangles in `reference_width x reference_height` coordinates;
+# each rectangle averages to one LED. The example below is a 2-zone split
+# screen layout. Real setups usually have one zone per LED on the strip.
+led_matrix:
+  reference_width: 1920
+  reference_height: 1080
+  zones:
+    - { x: 0,   y: 0, w: 960, h: 1080 }   # left half
+    - { x: 960, y: 0, w: 960, h: 1080 }   # right half
+
+# Most users only need to set mqtt.broker_url and led_matrix.zones above.
+# The remaining sections are shown with their defaults; uncomment + edit if
+# you need to override.
+#
+# capture:
+#   target_fps: 30
+#
+# color:
+#   gamma: 2.2
+#   brightness_max: 255
+#   white_balance_kelvin: 6500
+#   night_light_strength: 0.0
+#   luminosity_floor: 0.0
+#
+# smoothing:
+#   ema_alpha: 0.5
+#
+# power:
+#   respect_screensaver: true
+#   idle_pause_after_secs: null

@@ -1,0 +1,58 @@
+[package]
+name = "rustiferin"
+version = "0.1.0"
+edition = "2021"
+description = "Rust-native ambient lighting agent for Glow Worm Luciferin firmware (Plasma Wayland + MQTT only)"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+arc-swap = "1"
+async-trait = "0.1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_yml = "0.0.12"
+url = "2"
+itoa = "1"
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# I/O boundaries, gated so the test binary doesn't need libpipewire/libdbus.
+zbus = { version = "4", optional = true }
+ashpd = { version = "0.9", default-features = false, features = ["tokio"], optional = true }
+pipewire = { version = "0.9", optional = true }
+rumqttc = { version = "0.24", optional = true }
+ksni = { version = "0.2", optional = true }
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.31", features = ["staging", "client"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
+
+[features]
+default = ["wayland", "mqtt", "tray"]
+wayland = ["dep:zbus", "dep:ashpd", "dep:pipewire", "dep:wayland-client", "dep:wayland-protocols", "dep:futures-util"]
+mqtt = ["dep:rumqttc"]
+tray = ["dep:ksni"]
+# Expose the test fakes (FakeCapture, ...) to integration tests and downstream
+# crates without requiring `cfg(test)`. Off by default; tests opt in.
+test-fakes = []
+
+[dev-dependencies]
+proptest = "1"
+criterion = "0.5"
+tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
+
+[[example]]
+name = "portal_pipewire_smoke"
+required-features = ["wayland"]
+
+[[example]]
+name = "output_smoke"
+required-features = ["mqtt"]
+
+[[bench]]
+name = "zones"
+harness = false

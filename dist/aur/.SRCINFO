@@ -1,0 +1,16 @@
+pkgbase = rustiferin
+	pkgdesc = Rust ambient-lighting agent for Glow Worm Luciferin (Plasma Wayland + MQTT)
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/dalsh/rustiferin
+	arch = x86_64
+	license = GPL-3.0-or-later
+	makedepends = cargo
+	makedepends = pkgconf
+	depends = pipewire
+	depends = glibc
+	optdepends = mosquitto: local MQTT broker if you do not have one elsewhere on the LAN
+	source = rustiferin-0.1.0.tar.gz::https://github.com/dalsh/rustiferin/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = rustiferin
