@@ -5,9 +5,41 @@
 //! computed once per frame and applied per zone; when the frame matches the reference
 //! resolution the rescale is the identity transform.
 
+use std::sync::LazyLock;
+
 use crate::capture::{Frame, PixelFormat};
 use crate::config::schema::{LedMatrixConfig, LedZone};
 use crate::pipeline::LedColor;
+
+/// sRGB EOTF (decode) lookup: byte → linear-light value in `[0.0, 1.0]`.
+///
+/// Pixel values are stored gamma-encoded; arithmetic-averaging them directly
+/// crushes the contribution of bright pixels (the canonical "averaging in
+/// gamma space" bug). The pipeline linearises through this LUT, sums in
+/// linear light, then re-encodes for the LED.
+static SRGB_DECODE: LazyLock<[f32; 256]> = LazyLock::new(|| {
+    let mut t = [0f32; 256];
+    for (i, slot) in t.iter_mut().enumerate() {
+        let v = i as f32 / 255.0;
+        *slot = if v <= 0.040_45 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        };
+    }
+    t
+});
+
+/// sRGB OETF (encode): linear-light value in `[0.0, 1.0]` → sRGB byte.
+fn srgb_encode(linear: f32) -> u8 {
+    let l = linear.clamp(0.0, 1.0);
+    let v = if l <= 0.003_130_8 {
+        l * 12.92
+    } else {
+        1.055 * l.powf(1.0 / 2.4) - 0.055
+    };
+    (v * 255.0).round().clamp(0.0, 255.0) as u8
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScaledZone {
@@ -57,11 +89,12 @@ fn average_pixels(frame: &Frame, zone: &ScaledZone, step: u32) -> LedColor {
     let (r_idx, g_idx, b_idx) = channel_offsets(frame.format);
     let stride = frame.stride as usize;
     let bytes_per_px = pixel_size(frame.format);
+    let decode = &*SRGB_DECODE;
 
-    let mut sum_r: u64 = 0;
-    let mut sum_g: u64 = 0;
-    let mut sum_b: u64 = 0;
-    let mut count: u64 = 0;
+    let mut sum_r: f32 = 0.0;
+    let mut sum_g: f32 = 0.0;
+    let mut sum_b: f32 = 0.0;
+    let mut count: u32 = 0;
 
     let mut dy = 0u32;
     while dy < zone.h {
@@ -75,9 +108,9 @@ fn average_pixels(frame: &Frame, zone: &ScaledZone, step: u32) -> LedColor {
                 dx += step;
                 continue;
             }
-            sum_r += frame.buf[px + r_idx] as u64;
-            sum_g += frame.buf[px + g_idx] as u64;
-            sum_b += frame.buf[px + b_idx] as u64;
+            sum_r += decode[frame.buf[px + r_idx] as usize];
+            sum_g += decode[frame.buf[px + g_idx] as usize];
+            sum_b += decode[frame.buf[px + b_idx] as usize];
             count += 1;
             dx += step;
         }
@@ -87,10 +120,11 @@ fn average_pixels(frame: &Frame, zone: &ScaledZone, step: u32) -> LedColor {
     if count == 0 {
         return LedColor::default();
     }
+    let n = count as f32;
     LedColor {
-        r: (sum_r / count) as u8,
-        g: (sum_g / count) as u8,
-        b: (sum_b / count) as u8,
+        r: srgb_encode(sum_r / n),
+        g: srgb_encode(sum_g / n),
+        b: srgb_encode(sum_b / n),
     }
 }
 
@@ -332,9 +366,30 @@ mod tests {
         assert_eq!(out[0], LedColor::new(10, 20, 30));
     }
 
+    /// Independent reference implementation of the linear-light average.
+    ///
+    /// Computes the sRGB EOTF (decode) per channel per pixel using direct `powf`,
+    /// arithmetic-means the linear values, then re-encodes via the inverse OETF.
+    /// Deliberately written from scratch — no LUT, no helper reuse — so the
+    /// production code has to disagree with it if it diverges from the spec.
     fn scalar_reference(frame: &Frame, cfg: &LedMatrixConfig) -> Vec<LedColor> {
-        // Independent triple-loop reference: no factoring out, no bytes_per_px constant.
-        // Its only purpose is to disagree with the production impl if that one is wrong.
+        fn srgb_to_linear(c: u8) -> f64 {
+            let v = c as f64 / 255.0;
+            if v <= 0.040_45 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        fn linear_to_srgb(l: f64) -> u8 {
+            let l = l.clamp(0.0, 1.0);
+            let v = if l <= 0.003_130_8 {
+                l * 12.92
+            } else {
+                1.055 * l.powf(1.0 / 2.4) - 0.055
+            };
+            (v * 255.0).round().clamp(0.0, 255.0) as u8
+        }
         let (r_idx, g_idx, b_idx) = match frame.format {
             PixelFormat::Bgra | PixelFormat::Bgrx => (2usize, 1usize, 0usize),
             PixelFormat::Rgba => (0, 1, 2),
@@ -352,22 +407,22 @@ mod tests {
                 out.push(LedColor::default());
                 continue;
             }
-            let mut sr = 0u64;
-            let mut sg = 0u64;
-            let mut sb = 0u64;
+            let mut sr = 0.0f64;
+            let mut sg = 0.0f64;
+            let mut sb = 0.0f64;
             for dy in 0..h {
                 for dx in 0..w {
                     let p = ((y + dy) * frame.stride + (x + dx) * 4) as usize;
-                    sr += frame.buf[p + r_idx] as u64;
-                    sg += frame.buf[p + g_idx] as u64;
-                    sb += frame.buf[p + b_idx] as u64;
+                    sr += srgb_to_linear(frame.buf[p + r_idx]);
+                    sg += srgb_to_linear(frame.buf[p + g_idx]);
+                    sb += srgb_to_linear(frame.buf[p + b_idx]);
                 }
             }
-            let n = (w as u64) * (h as u64);
+            let n = (w as f64) * (h as f64);
             out.push(LedColor {
-                r: (sr / n) as u8,
-                g: (sg / n) as u8,
-                b: (sb / n) as u8,
+                r: linear_to_srgb(sr / n),
+                g: linear_to_srgb(sg / n),
+                b: linear_to_srgb(sb / n),
             });
         }
         out
@@ -416,7 +471,105 @@ mod tests {
             let mut out = vec![LedColor::default(); cfg.zones.len()];
             average_zones(&frame, &cfg, 1, &mut out);
             let expected = scalar_reference(&frame, &cfg);
-            proptest::prop_assert_eq!(out, expected);
+            // Allow ±1 byte per channel: the production code uses a 256-entry
+            // decode LUT plus an f32 encode, while the reference uses direct f64
+            // powf throughout. Rounding can diverge by one in the last place.
+            for (got, want) in out.iter().zip(expected.iter()) {
+                for (g, w) in [(got.r, want.r), (got.g, want.g), (got.b, want.b)] {
+                    proptest::prop_assert!(
+                        g.abs_diff(w) <= 1,
+                        "channel diverged: got {g}, want {w} (full got={got:?}, want={want:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn checkerboard_white_black_averages_to_linear_midgrey() {
+        // Half the pixels pure white, half pure black. Plain sRGB arithmetic mean
+        // would give ~128 ("perceptual half-light"); the correct linear-light
+        // average is 0.5 in linear, which re-encodes to ~188 in sRGB. The exact
+        // sRGB encoding of 0.5 is `1.055 * 0.5^(1/2.4) - 0.055 ≈ 0.7354 * 255 ≈ 188`.
+        // This test fails on a gamma-space averaging implementation by ~60 bytes.
+        let width = 4u32;
+        let height = 4u32;
+        let stride = width * 4;
+        let mut buf = vec![0u8; (stride * height) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let p = ((y * stride) + x * 4) as usize;
+                let white = (x + y) % 2 == 0;
+                let v = if white { 255 } else { 0 };
+                buf[p] = v;
+                buf[p + 1] = v;
+                buf[p + 2] = v;
+                buf[p + 3] = 255;
+            }
+        }
+        let frame = Frame {
+            buf,
+            width,
+            height,
+            stride,
+            format: PixelFormat::Bgra,
+        };
+        let cfg = full_zone(width, height);
+        let mut out = vec![LedColor::default(); 1];
+        average_zones(&frame, &cfg, 1, &mut out);
+        // ±1 byte tolerance for LUT/encode rounding.
+        for ch in [out[0].r, out[0].g, out[0].b] {
+            assert!(
+                (187..=189).contains(&ch),
+                "expected linear-midgrey ~188, got {ch} (full {:?}). Likely a gamma-space mean.",
+                out[0]
+            );
+        }
+    }
+
+    #[test]
+    fn one_bright_pixel_in_dark_zone_outweighs_naive_mean() {
+        // 1 white pixel + 15 black pixels. Linear average = 1/16 = 0.0625 in linear,
+        // which encodes to sRGB byte ≈ 71. Plain sRGB mean would give 255/16 ≈ 16.
+        let width = 4u32;
+        let height = 4u32;
+        let stride = width * 4;
+        let mut buf = vec![0u8; (stride * height) as usize];
+        // exactly one white pixel
+        let p = 0;
+        buf[p] = 255;
+        buf[p + 1] = 255;
+        buf[p + 2] = 255;
+        buf[p + 3] = 255;
+        let frame = Frame {
+            buf,
+            width,
+            height,
+            stride,
+            format: PixelFormat::Bgra,
+        };
+        let cfg = full_zone(width, height);
+        let mut out = vec![LedColor::default(); 1];
+        average_zones(&frame, &cfg, 1, &mut out);
+        for ch in [out[0].r, out[0].g, out[0].b] {
+            assert!(
+                (68..=74).contains(&ch),
+                "expected linear-light ~71, got {ch}. Likely a gamma-space mean."
+            );
+        }
+    }
+
+    #[test]
+    fn solid_midgrey_is_preserved_through_round_trip() {
+        // A uniform sRGB 128 frame must produce sRGB 128 out: linearize, average
+        // (identity for a constant), re-encode round-trips to the same byte.
+        let frame = solid_bgra(4, 4, 128, 128, 128);
+        let cfg = full_zone(4, 4);
+        let mut out = vec![LedColor::default(); 1];
+        average_zones(&frame, &cfg, 1, &mut out);
+        // Round-trip tolerance: f32 LUT encode can differ from input by 1 byte.
+        for ch in [out[0].r, out[0].g, out[0].b] {
+            assert!((127..=129).contains(&ch), "round-trip drift: {ch}");
         }
     }
 
