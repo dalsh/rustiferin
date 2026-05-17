@@ -194,7 +194,7 @@ async fn run_inner(
     state_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     state_tick.tick().await;
 
-    // Cap the publish rate so we don't fill the broker → device TCP send buffer
+    // Cap the publish rate so we don't fill the broker -> device TCP send buffer
     // with frames the firmware can't drain. Glow Worm consumes ~20-30 fps at
     // ~110 LEDs; the screen capture happily delivers 60-144. Without this gate
     // the kernel buffers minutes of stale frames downstream.
@@ -253,7 +253,7 @@ impl PublishGate {
 
     /// Mark a publish as done at `now`; schedule the next allowed publish.
     /// Simple `now + interval` form: per-publish overhead naturally throttles
-    /// the rate to whatever the broker→device round-trip yields.
+    /// the rate to whatever the broker->device round-trip yields.
     fn advance(&mut self, now: Instant) {
         self.next_allowed = now + self.interval;
     }
@@ -583,7 +583,7 @@ mod tests {
     fn permute_reverse_then_rotate_matches_firefly_order() {
         // Mirrors `FireflyLuciferin.sendColors`: reverse first, then rotate left
         // by `start_offset`. Input [1,2,3,4] with offset=1, reverse=true yields
-        // [4,3,2,1] after reverse → [3,2,1,4] after left-rotate by 1.
+        // [4,3,2,1] after reverse -> [3,2,1,4] after left-rotate by 1.
         use crate::pipeline::LedColor;
         let colors = vec![
             LedColor::new(1, 1, 1),

@@ -1,9 +1,9 @@
 //! Hardware smoke harness for the MQTT output task.
 //!
 //! Loads a real `Config`, spins up `output::run` against the configured broker,
-//! and drives the pipeline → output `watch` channel with a deterministic color
+//! and drives the pipeline -> output `watch` channel with a deterministic color
 //! sequence so the LED strip can be observed visually. Stands in for the full
-//! capture → pipeline → output path until `app.rs` is wired.
+//! capture -> pipeline -> output path until `app.rs` is wired.
 //!
 //! Run: `cargo run --release --example output_smoke -- /tmp/rustiferin-smoke.yaml`
 

@@ -57,7 +57,7 @@ pub fn hsl_offset(leds: &mut [LedColor], offsets: &HslOffsets) {
     }
 }
 
-/// Apply Tanner Helland's color-temperature → RGB approximation as a per-channel scale.
+/// Apply Tanner Helland's color-temperature -> RGB approximation as a per-channel scale.
 /// 6500 K is treated as the neutral point: at exactly 6500 the function is the identity,
 /// so users who never touch the setting see no transformation.
 ///
@@ -102,36 +102,55 @@ pub fn night_light(leds: &mut [LedColor], strength: f32) {
     }
 }
 
-/// Raise the HSB brightness of any LED below `floor` up to the floor, preserving
-/// hue and saturation. `floor` is in `[0, 1]`; `0` is a no-op. Pure black inputs
-/// have no hue to preserve and are returned as neutral grey at the floor level.
+/// Raise the HSB brightness of any LED below `floor` up to the floor, blending
+/// toward neutral grey for very-dark inputs whose hue cannot be trusted.
+/// `floor` is in `[0, 1]`; `0` is a no-op.
 ///
-/// Mirrors Firefly Luciferin's `ImageProcessor.adjustLuminosityThreshold` (which
-/// snaps `Color.RGBtoHSB`'s `B` component to a minimum). Applied **after** gamma
-/// so it boosts the *darkened-by-gamma* output rather than the raw average.
+/// Diverges from Firefly Luciferin's `ImageProcessor.adjustLuminosityThreshold`
+/// (which snaps HSB-B to a minimum and preserves H/S unconditionally). The
+/// Firefly behaviour amplifies a one-byte channel tint into a fully saturated
+/// hue at the floor level and produces a hard cliff between pure-black (grey)
+/// and near-black (saturated) inputs. We instead lerp from grey-at-floor toward
+/// the scaled-to-floor result by `max / floor_byte`, so:
+///
+/// - `max == 0`              -> neutral grey at floor (same as Firefly).
+/// - `max` well below floor  -> mostly grey, faint hue tint.
+/// - `max` close to floor    -> mostly hue, slight grey blend.
+/// - `max >= floor`          -> unchanged.
+///
+/// Applied **after** gamma so it boosts the *darkened-by-gamma* output rather
+/// than the raw average.
 pub fn luminosity_floor(leds: &mut [LedColor], floor: f32) {
     if floor <= 0.0 {
         return;
     }
     let floor = floor.clamp(0.0, 1.0);
     let floor_byte = (floor * 255.0).round() as u32;
-    let floor_byte_u8 = floor_byte.min(255) as u8;
+    if floor_byte == 0 {
+        return;
+    }
+    let grey = floor_byte as f32;
     for led in leds.iter_mut() {
         let max = led.r.max(led.g).max(led.b);
-        if max == 0 {
-            // No hue to preserve, go neutral.
-            led.r = floor_byte_u8;
-            led.g = floor_byte_u8;
-            led.b = floor_byte_u8;
-        } else if (max as u32) < floor_byte {
-            // Scale uniformly so the max channel reaches the floor; clamp the
-            // others against u8 overflow defensively (the scale factor preserves
-            // ordering so only rounding can push us over).
-            let scale = floor_byte as f32 / max as f32;
-            led.r = ((led.r as f32 * scale).round() as u32).min(255) as u8;
-            led.g = ((led.g as f32 * scale).round() as u32).min(255) as u8;
-            led.b = ((led.b as f32 * scale).round() as u32).min(255) as u8;
+        if (max as u32) >= floor_byte {
+            continue;
         }
+        let trust = max as f32 / grey;
+        let (hue_r, hue_g, hue_b) = if max == 0 {
+            // No hue to preserve; the lerp picks grey at trust=0 regardless,
+            // but avoid the 0/0 in `scale` below.
+            (grey, grey, grey)
+        } else {
+            let scale = grey / max as f32;
+            (
+                led.r as f32 * scale,
+                led.g as f32 * scale,
+                led.b as f32 * scale,
+            )
+        };
+        led.r = (grey + (hue_r - grey) * trust).round().clamp(0.0, 255.0) as u8;
+        led.g = (grey + (hue_g - grey) * trust).round().clamp(0.0, 255.0) as u8;
+        led.b = (grey + (hue_b - grey) * trust).round().clamp(0.0, 255.0) as u8;
     }
 }
 
@@ -314,7 +333,7 @@ mod tests {
                 l: 0.0,
             },
         );
-        // 60° hue shift on pure red → yellow.
+        // 60° hue shift on pure red -> yellow.
         assert_eq!(leds[0], LedColor::new(255, 255, 0));
     }
 
@@ -421,7 +440,7 @@ mod tests {
     fn brightness_limit_halves_when_peak_exceeds_cap() {
         let mut leds = vec![LedColor::new(100, 200, 50)];
         brightness_limit(&mut leds, 100);
-        // peak was 200, cap is 100 → scale 0.5
+        // peak was 200, cap is 100 -> scale 0.5
         assert_eq!(leds[0], LedColor::new(50, 100, 25));
     }
 
@@ -446,23 +465,78 @@ mod tests {
 
     #[test]
     fn luminosity_floor_leaves_already_bright_pixels_alone() {
-        // HSB brightness = max(r, g, b) / 255. (200,0,0) → 0.78 > 0.10 floor.
+        // HSB brightness = max(r, g, b) / 255. (200,0,0) -> 0.78 > 0.10 floor.
         let mut leds = vec![LedColor::new(200, 0, 0)];
         luminosity_floor(&mut leds, 0.10);
         assert_eq!(leds[0], LedColor::new(200, 0, 0));
     }
 
     #[test]
-    fn luminosity_floor_boosts_dim_pixel_to_floor_preserving_hue() {
-        // (10, 5, 0) has max=10 → HSB brightness 0.039. With floor 0.20 the max
-        // channel must reach 51 (= 0.20 * 255). Scale factor 51/10 = 5.1 applied
-        // uniformly to all channels: (10, 5, 0) → (51, 26, 0).
+    fn luminosity_floor_dim_pixel_lifted_with_partial_hue() {
+        // Smoothed lift: very-dark inputs cannot be trusted to carry hue
+        // information (1-byte noise becomes a fully saturated colour under
+        // the naive scale-to-floor approach). The `trust` factor is
+        // `max / floor_byte`; at max=10, floor=0.20 (byte 51) trust=0.196,
+        // so the output blends 80% grey + 20% scaled hue.
+        // Scaled-to-floor would be (51, 26, 0); grey at floor is (51, 51, 51).
+        //   r: lerp(51, 51, 0.196) = 51
+        //   g: lerp(51, 26, 0.196) ~= 46
+        //   b: lerp(51,  0, 0.196) ~= 41
         let mut leds = vec![LedColor::new(10, 5, 0)];
         luminosity_floor(&mut leds, 0.20);
         let out = leds[0];
         assert_eq!(out.r, 51);
-        assert_eq!(out.g, 26);
-        assert_eq!(out.b, 0);
+        assert!((45..=47).contains(&out.g), "expected g~46, got {}", out.g);
+        assert!((40..=42).contains(&out.b), "expected b~41, got {}", out.b);
+    }
+
+    #[test]
+    fn luminosity_floor_noise_near_black_does_not_saturate() {
+        // One LSB tint in an otherwise black pixel: the OLD behaviour scaled
+        // (1, 0, 0) to (13, 0, 0) with floor 0.05 (byte 13), a fully
+        // saturated red. The NEW behaviour blends almost entirely toward
+        // grey (trust = 1/13 ~= 0.077), so the off-channels stay within
+        // a couple of bytes of the max. No saturation explosion.
+        let mut leds = vec![LedColor::new(1, 0, 0)];
+        luminosity_floor(&mut leds, 0.05);
+        let out = leds[0];
+        assert_eq!(out.r, 13);
+        // Off-channels must be close to the max (no saturated hue).
+        assert!(
+            out.r.abs_diff(out.g) <= 2 && out.r.abs_diff(out.b) <= 2,
+            "near-black noise must not produce a saturated hue, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn luminosity_floor_just_below_floor_preserves_hue() {
+        // max close to the floor: trust is near 1, behaviour is close to
+        // the naive scale-to-floor. (40, 0, 0) with floor 0.20 (byte 51)
+        // gives trust = 40/51 ~= 0.784. Scaled (51, 0, 0) blended with
+        // grey (51, 51, 51):
+        //   g = lerp(51, 0, 0.784) = 51 - 51*0.784 ~= 11
+        // So hue dominates: green and blue stay well below the red.
+        let mut leds = vec![LedColor::new(40, 0, 0)];
+        luminosity_floor(&mut leds, 0.20);
+        let out = leds[0];
+        assert_eq!(out.r, 51);
+        assert!(
+            out.g < 20 && out.b < 20,
+            "hue should dominate near floor, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn luminosity_floor_at_or_above_floor_is_identity() {
+        // max >= floor must pass through untouched: the lift only fires
+        // when the input is *below* the floor.
+        let mut leds = vec![
+            LedColor::new(51, 25, 10),   // max == floor (byte 51)
+            LedColor::new(200, 100, 50), // well above
+        ];
+        let snapshot = leds.clone();
+        luminosity_floor(&mut leds, 0.20);
+        assert_eq!(leds, snapshot);
     }
 
     #[test]
@@ -471,7 +545,7 @@ mod tests {
         // `Color.getHSBColor(0, 0, floor)`: pure grey at the floor brightness.
         let mut leds = vec![LedColor::new(0, 0, 0)];
         luminosity_floor(&mut leds, 0.20);
-        // floor 0.20 → byte 51. All channels equal.
+        // floor 0.20 -> byte 51. All channels equal.
         assert_eq!(leds[0], LedColor::new(51, 51, 51));
     }
 

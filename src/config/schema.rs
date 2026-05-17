@@ -122,6 +122,20 @@ pub struct HslOffsets {
     pub l: f32,
 }
 
+/// How `pipeline::zones` collapses a zone's pixels to a single LED color.
+///
+/// `Mean` is the arithmetic linear-light average; `DominantAdv` is a k-means
+/// clustering pass that picks the most-represented color. Dominant is the
+/// punchier option on high-contrast content where the mean would collapse
+/// toward grey.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum AveragingMode {
+    #[default]
+    Mean,
+    DominantAdv,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ColorConfig {
@@ -135,6 +149,8 @@ pub struct ColorConfig {
     /// Default `0.0` disables. Mirrors Firefly Luciferin's `luminosityThreshold`
     /// (configured there in percent, `5` in Firefly = `0.05` here).
     pub luminosity_floor: f32,
+    /// Per-zone pixel-to-LED reduction. See [`AveragingMode`].
+    pub averaging: AveragingMode,
 }
 
 impl Default for ColorConfig {
@@ -146,6 +162,7 @@ impl Default for ColorConfig {
             brightness_max: 255,
             hsl_offsets: HslOffsets::default(),
             luminosity_floor: 0.0,
+            averaging: AveragingMode::default(),
         }
     }
 }

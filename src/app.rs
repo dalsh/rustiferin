@@ -21,7 +21,7 @@ use {
 #[cfg(all(feature = "wayland", feature = "mqtt", feature = "tray"))]
 use crate::tray::{self, ProductionTrayServiceFactory, TrayCommand};
 
-/// Recycled buffer slots on the capture → pipeline hop.
+/// Recycled buffer slots on the capture -> pipeline hop.
 #[cfg(all(feature = "wayland", feature = "mqtt"))]
 const POOL_SIZE: usize = 4;
 /// Upper bound for a BGRA frame at 3840×2160; the pool sizes every buffer to this.

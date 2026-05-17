@@ -1,8 +1,7 @@
 //! XDG ScreenCast portal + PipeWire capture source.
 //!
 //! Validation strategy: not unit-tested; smoke-tested manually against a real
-//! Plasma Wayland session via the `portal_pipewire_smoke` example. See
-//! `plans/03-capture.md` §"Acceptance criteria".
+//! Plasma Wayland session via the `portal_pipewire_smoke` example.
 
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
@@ -610,7 +609,7 @@ fn run_pipewire(
 
     // Constrain buffer type to MemFd. Without this, compositors that default
     // to DMA-BUF (Mutter, sway) negotiate a buffer kind our `process()`
-    // callback cannot read. See plans/portal-memfd-only.md.
+    // callback cannot read..
     let memfd_mask: i32 = 1 << pw::spa::sys::SPA_DATA_MemFd;
     let buffers_obj = pw::spa::pod::Object {
         type_: pw::spa::utils::SpaTypes::ObjectParamBuffers.as_raw(),
@@ -681,7 +680,7 @@ mod tests {
         for _ in 0..6 {
             let _ = c.note_failure();
         }
-        // After six failures (1, 2, 4, 8, 16, 32→30), the next reported sleep
+        // After six failures (1, 2, 4, 8, 16, 32->30), the next reported sleep
         // must be the cap.
         assert_eq!(c.note_failure(), Some(BACKOFF_MAX));
         assert_eq!(c.note_failure(), Some(BACKOFF_MAX));

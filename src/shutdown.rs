@@ -76,7 +76,7 @@ impl Shutdown {
             .name(name.to_string())
             .spawn(move || {
                 // No catch_unwind: if `f` panics, `tx` is dropped without sending and the
-                // async wrapper observes RecvError → TaskError::Panicked.
+                // async wrapper observes RecvError -> TaskError::Panicked.
                 let result = f(thread_token);
                 let _ = tx.send(result);
             })?;

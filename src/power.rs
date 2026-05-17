@@ -444,13 +444,13 @@ mod tests {
         let mut s = PowerState::new();
         s.observe_screensaver(true);
         s.observe_wayland(true);
-        // Screensaver releases but wayland still idle → still Idle, no emit.
+        // Screensaver releases but wayland still idle -> still Idle, no emit.
         assert_eq!(s.observe_screensaver(false), None);
 
         let mut s = PowerState::new();
         s.observe_screensaver(true);
         s.observe_wayland(true);
-        // Wayland releases but screensaver still active → still Idle, no emit.
+        // Wayland releases but screensaver still active -> still Idle, no emit.
         assert_eq!(s.observe_wayland(false), None);
     }
 

@@ -37,6 +37,12 @@ led_matrix:
 #   white_balance_kelvin: 6500
 #   night_light_strength: 0.0
 #   luminosity_floor: 0.0
+#   # Per-zone pixel-to-LED reduction. `mean` is the default arithmetic
+#   # linear-light average. `dominant-adv` runs a k-means clustering pass
+#   # that picks the most-represented colour per zone; trades a bit of CPU
+#   # for punchier output on high-contrast content (games), at the cost of
+#   # occasional flicker on scene cuts.
+#   averaging: mean
 #
 # smoothing:
 #   ema_alpha: 0.5

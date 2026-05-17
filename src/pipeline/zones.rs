@@ -8,16 +8,17 @@
 use std::sync::LazyLock;
 
 use crate::capture::{Frame, PixelFormat};
-use crate::config::schema::{LedMatrixConfig, LedZone};
+use crate::config::schema::{AveragingMode, LedMatrixConfig, LedZone};
+use crate::pipeline::dominant::dominant_adv_pixels;
 use crate::pipeline::LedColor;
 
-/// sRGB EOTF (decode) lookup: byte → linear-light value in `[0.0, 1.0]`.
+/// sRGB EOTF (decode) lookup: byte -> linear-light value in `[0.0, 1.0]`.
 ///
 /// Pixel values are stored gamma-encoded; arithmetic-averaging them directly
 /// crushes the contribution of bright pixels (the canonical "averaging in
 /// gamma space" bug). The pipeline linearises through this LUT, sums in
 /// linear light, then re-encodes for the LED.
-static SRGB_DECODE: LazyLock<[f32; 256]> = LazyLock::new(|| {
+pub(super) static SRGB_DECODE: LazyLock<[f32; 256]> = LazyLock::new(|| {
     let mut t = [0f32; 256];
     for (i, slot) in t.iter_mut().enumerate() {
         let v = i as f32 / 255.0;
@@ -30,8 +31,9 @@ static SRGB_DECODE: LazyLock<[f32; 256]> = LazyLock::new(|| {
     t
 });
 
-/// sRGB OETF (encode): linear-light value in `[0.0, 1.0]` → sRGB byte.
-fn srgb_encode(linear: f32) -> u8 {
+/// sRGB OETF (encode): linear-light value in `[0.0, 1.0]` -> sRGB byte.
+#[inline]
+pub(super) fn srgb_encode(linear: f32) -> u8 {
     let l = linear.clamp(0.0, 1.0);
     let v = if l <= 0.003_130_8 {
         l * 12.92
@@ -70,7 +72,14 @@ pub fn scale_zone(
 /// Panics in debug mode if `out.len() != cfg.zones.len()`. In release the loop is bounded
 /// by `cfg.zones.iter().zip(out.iter_mut())` so a mismatched output buffer simply ignores
 /// the trailing entries, but the pipeline always sizes `scratch` to match.
-pub fn average_zones(frame: &Frame, cfg: &LedMatrixConfig, subsample: u32, out: &mut [LedColor]) {
+pub fn average_zones(
+    frame: &Frame,
+    cfg: &LedMatrixConfig,
+    subsample: u32,
+    mode: AveragingMode,
+    dominant_scratch: &mut Vec<[f32; 3]>,
+    out: &mut [LedColor],
+) {
     debug_assert_eq!(out.len(), cfg.zones.len());
     let step = subsample.max(1);
     let sx = frame.width as f32 / cfg.reference_width.max(1) as f32;
@@ -80,7 +89,12 @@ pub fn average_zones(frame: &Frame, cfg: &LedMatrixConfig, subsample: u32, out: 
         *slot = if scaled.w == 0 || scaled.h == 0 {
             LedColor::default()
         } else {
-            average_pixels(frame, &scaled, step)
+            match mode {
+                AveragingMode::Mean => average_pixels(frame, &scaled, step),
+                AveragingMode::DominantAdv => {
+                    dominant_adv_pixels(frame, &scaled, step, dominant_scratch)
+                }
+            }
         };
     }
 }
@@ -128,7 +142,7 @@ fn average_pixels(frame: &Frame, zone: &ScaledZone, step: u32) -> LedColor {
     }
 }
 
-fn channel_offsets(format: PixelFormat) -> (usize, usize, usize) {
+pub(super) fn channel_offsets(format: PixelFormat) -> (usize, usize, usize) {
     match format {
         PixelFormat::Bgra | PixelFormat::Bgrx => (2, 1, 0),
         PixelFormat::Rgba => (0, 1, 2),
@@ -139,7 +153,7 @@ fn channel_offsets(format: PixelFormat) -> (usize, usize, usize) {
 /// Bytes per pixel for each supported [`PixelFormat`]. All variants are 4-byte
 /// today, but keeping this next to [`channel_offsets`] means a future 3-byte
 /// or 8-byte format can be added without an off-by-one in the inner loop.
-fn pixel_size(format: PixelFormat) -> usize {
+pub(super) fn pixel_size(format: PixelFormat) -> usize {
     match format {
         PixelFormat::Bgra | PixelFormat::Bgrx | PixelFormat::Rgba | PixelFormat::Xrgb => 4,
     }
@@ -186,7 +200,14 @@ mod tests {
         let frame = solid_bgra(8, 8, 0, 0, 255);
         let cfg = full_zone(8, 8);
         let mut out = vec![LedColor::default(); 1];
-        average_zones(&frame, &cfg, 1, &mut out);
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::Mean,
+            &mut Vec::new(),
+            &mut out,
+        );
         assert_eq!(out[0], LedColor::new(255, 0, 0));
     }
 
@@ -223,7 +244,14 @@ mod tests {
             ..Default::default()
         };
         let mut out = vec![LedColor::default(); 2];
-        average_zones(&frame, &cfg, 1, &mut out);
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::Mean,
+            &mut Vec::new(),
+            &mut out,
+        );
         assert_eq!(out[0], LedColor::new(200, 0, 0));
         assert_eq!(out[1], LedColor::new(0, 0, 100));
     }
@@ -252,7 +280,14 @@ mod tests {
         };
         let cfg = full_zone(width, height);
         let mut out = vec![LedColor::default(); 1];
-        average_zones(&frame, &cfg, 1, &mut out);
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::Mean,
+            &mut Vec::new(),
+            &mut out,
+        );
         assert_eq!(out[0], LedColor::new(150, 100, 50));
     }
 
@@ -291,7 +326,14 @@ mod tests {
             ..Default::default()
         };
         let mut out = vec![LedColor::default(); 1];
-        average_zones(&frame, &cfg, 1, &mut out);
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::Mean,
+            &mut Vec::new(),
+            &mut out,
+        );
         assert_eq!(out[0], LedColor::new(255, 0, 0));
     }
 
@@ -312,7 +354,14 @@ mod tests {
             ..Default::default()
         };
         let mut out = vec![LedColor::default(); 1];
-        average_zones(&frame, &cfg, 1, &mut out);
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::Mean,
+            &mut Vec::new(),
+            &mut out,
+        );
         assert_eq!(out[0], LedColor::default());
     }
 
@@ -337,7 +386,14 @@ mod tests {
         };
         let cfg = full_zone(width, height);
         let mut out = vec![LedColor::default(); 1];
-        average_zones(&frame, &cfg, 1, &mut out);
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::Mean,
+            &mut Vec::new(),
+            &mut out,
+        );
         assert_eq!(out[0], LedColor::new(200, 100, 50));
     }
 
@@ -362,7 +418,14 @@ mod tests {
         };
         let cfg = full_zone(width, height);
         let mut out = vec![LedColor::default(); 1];
-        average_zones(&frame, &cfg, 1, &mut out);
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::Mean,
+            &mut Vec::new(),
+            &mut out,
+        );
         assert_eq!(out[0], LedColor::new(10, 20, 30));
     }
 
@@ -370,7 +433,7 @@ mod tests {
     ///
     /// Computes the sRGB EOTF (decode) per channel per pixel using direct `powf`,
     /// arithmetic-means the linear values, then re-encodes via the inverse OETF.
-    /// Deliberately written from scratch — no LUT, no helper reuse — so the
+    /// Deliberately written from scratch, no LUT, no helper reuse, so the
     /// production code has to disagree with it if it diverges from the spec.
     fn scalar_reference(frame: &Frame, cfg: &LedMatrixConfig) -> Vec<LedColor> {
         fn srgb_to_linear(c: u8) -> f64 {
@@ -469,7 +532,7 @@ mod tests {
                 ..Default::default()
             };
             let mut out = vec![LedColor::default(); cfg.zones.len()];
-            average_zones(&frame, &cfg, 1, &mut out);
+            average_zones(&frame, &cfg, 1, AveragingMode::Mean, &mut Vec::new(), &mut out);
             let expected = scalar_reference(&frame, &cfg);
             // Allow ±1 byte per channel: the production code uses a 256-entry
             // decode LUT plus an f32 encode, while the reference uses direct f64
@@ -516,7 +579,14 @@ mod tests {
         };
         let cfg = full_zone(width, height);
         let mut out = vec![LedColor::default(); 1];
-        average_zones(&frame, &cfg, 1, &mut out);
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::Mean,
+            &mut Vec::new(),
+            &mut out,
+        );
         // ±1 byte tolerance for LUT/encode rounding.
         for ch in [out[0].r, out[0].g, out[0].b] {
             assert!(
@@ -550,7 +620,14 @@ mod tests {
         };
         let cfg = full_zone(width, height);
         let mut out = vec![LedColor::default(); 1];
-        average_zones(&frame, &cfg, 1, &mut out);
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::Mean,
+            &mut Vec::new(),
+            &mut out,
+        );
         for ch in [out[0].r, out[0].g, out[0].b] {
             assert!(
                 (68..=74).contains(&ch),
@@ -566,7 +643,14 @@ mod tests {
         let frame = solid_bgra(4, 4, 128, 128, 128);
         let cfg = full_zone(4, 4);
         let mut out = vec![LedColor::default(); 1];
-        average_zones(&frame, &cfg, 1, &mut out);
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::Mean,
+            &mut Vec::new(),
+            &mut out,
+        );
         // Round-trip tolerance: f32 LUT encode can differ from input by 1 byte.
         for ch in [out[0].r, out[0].g, out[0].b] {
             assert!((127..=129).contains(&ch), "round-trip drift: {ch}");

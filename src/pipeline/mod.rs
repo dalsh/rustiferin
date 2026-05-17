@@ -1,4 +1,4 @@
-//! Pipeline: capture frame → zone averaging → color correction → smoothing → LedFrame.
+//! Pipeline: capture frame -> zone averaging -> color correction -> smoothing -> LedFrame.
 //!
 //! Runs on a dedicated `std::thread` because it is CPU-bound and would otherwise starve
 //! tokio's blocking pool. The thread does not host a tokio runtime; it uses the synchronous
@@ -6,6 +6,7 @@
 //! whose `send` is non-blocking.
 
 pub mod color;
+pub mod dominant;
 pub mod smoothing;
 pub mod zones;
 
@@ -100,9 +101,19 @@ pub fn run_loop(
     let span = tracing::info_span!("pipeline");
     let _enter = span.enter();
 
+    tracing::info!(
+        averaging = ?config.color.averaging,
+        subsample = config.capture.subsample,
+        "pipeline starting"
+    );
+
     let mut ema = EmaState::default();
     let zone_count = config.led_matrix.zones.len();
     let mut scratch: Vec<LedColor> = vec![LedColor::default(); zone_count];
+    // Reused linear-light pixel buffer for dominant-adv averaging. Stays
+    // empty (zero-cost) when `color.averaging` is `Mean`; grows once and
+    // is reused for the life of the thread under `DominantAdv`.
+    let mut dominant_scratch: Vec<[f32; 3]> = Vec::new();
     let mut frame_number: u64 = 0;
     let mut publishing = true;
 
@@ -152,6 +163,8 @@ pub fn run_loop(
             &frame,
             &config.led_matrix,
             config.capture.subsample,
+            config.color.averaging,
+            &mut dominant_scratch,
             &mut scratch,
         );
         color::gamma(&mut scratch, &gamma_lut);

@@ -1,8 +1,8 @@
 pub mod schema;
 
 pub use schema::{
-    CaptureConfig, ColorConfig, Config, ConfigError, GeneralConfig, HslOffsets, LedMatrixConfig,
-    LedZone, MqttConfig, PowerConfig, SmoothingConfig,
+    AveragingMode, CaptureConfig, ColorConfig, Config, ConfigError, GeneralConfig, HslOffsets,
+    LedMatrixConfig, LedZone, MqttConfig, PowerConfig, SmoothingConfig,
 };
 
 use std::ffi::OsString;

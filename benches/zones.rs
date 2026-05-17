@@ -4,13 +4,13 @@
 //!   1920x1080_100zones: 2130 µs / frame  (~469 fps headroom)
 //!   3840x2160_100zones: 8590 µs / frame  (~116 fps headroom)
 //!
-//! Soft target from plans/04-pipeline.md is < 5 ms at 1080p; 4K has no formal
+//! Soft target is < 5 ms at 1080p; 4K has no formal
 //! target but at 60fps the budget is ~16.7 ms.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use rustiferin::capture::{Frame, PixelFormat};
-use rustiferin::config::schema::{LedMatrixConfig, LedZone};
+use rustiferin::config::schema::{AveragingMode, LedMatrixConfig, LedZone};
 use rustiferin::pipeline::zones::average_zones;
 use rustiferin::pipeline::LedColor;
 
@@ -61,18 +61,64 @@ fn build_cfg(width: u32, height: u32) -> LedMatrixConfig {
 fn bench_average_zones(c: &mut Criterion) {
     let mut group = c.benchmark_group("average_zones");
 
+    // One scratch buffer per bench harness, mirroring the pipeline thread's
+    // lifetime ownership: this is what we're measuring, the alloc-free path.
+    let mut dominant_scratch: Vec<[f32; 3]> = Vec::new();
+
     let frame_hd = build_frame(1920, 1080);
     let cfg_hd = build_cfg(1920, 1080);
     let mut out_hd = vec![LedColor::default(); cfg_hd.zones.len()];
-    group.bench_function("1920x1080_100zones", |b| {
-        b.iter(|| average_zones(black_box(&frame_hd), black_box(&cfg_hd), 1, &mut out_hd));
+    group.bench_function("1920x1080_100zones_mean", |b| {
+        b.iter(|| {
+            average_zones(
+                black_box(&frame_hd),
+                black_box(&cfg_hd),
+                1,
+                AveragingMode::Mean,
+                &mut dominant_scratch,
+                &mut out_hd,
+            )
+        });
+    });
+    group.bench_function("1920x1080_100zones_dominant_adv", |b| {
+        b.iter(|| {
+            average_zones(
+                black_box(&frame_hd),
+                black_box(&cfg_hd),
+                1,
+                AveragingMode::DominantAdv,
+                &mut dominant_scratch,
+                &mut out_hd,
+            )
+        });
     });
 
     let frame_4k = build_frame(3840, 2160);
     let cfg_4k = build_cfg(3840, 2160);
     let mut out_4k = vec![LedColor::default(); cfg_4k.zones.len()];
-    group.bench_function("3840x2160_100zones", |b| {
-        b.iter(|| average_zones(black_box(&frame_4k), black_box(&cfg_4k), 1, &mut out_4k));
+    group.bench_function("3840x2160_100zones_mean", |b| {
+        b.iter(|| {
+            average_zones(
+                black_box(&frame_4k),
+                black_box(&cfg_4k),
+                1,
+                AveragingMode::Mean,
+                &mut dominant_scratch,
+                &mut out_4k,
+            )
+        });
+    });
+    group.bench_function("3840x2160_100zones_dominant_adv", |b| {
+        b.iter(|| {
+            average_zones(
+                black_box(&frame_4k),
+                black_box(&cfg_4k),
+                1,
+                AveragingMode::DominantAdv,
+                &mut dominant_scratch,
+                &mut out_4k,
+            )
+        });
     });
 
     group.finish();
