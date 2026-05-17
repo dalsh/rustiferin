@@ -17,13 +17,27 @@ allow = [
     "Zlib",
     "MPL-2.0",
     "CC0-1.0",
+    # ksni is licensed Unlicense (public-domain equivalent, OSI/FSF approved).
+    "Unlicense",
 ]
 confidence-threshold = 0.93
 
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+# rumqttc 0.25.1 pins `rustls-webpki = "0.102.8"` and `rustls-pemfile = "2"`,
+# so we cannot upgrade to the fixed versions without forking rumqttc. The
+# four rustls-webpki CVEs require a misissued/attacker-controlled certificate
+# chain to exploit; for an MQTT client connecting to a configured broker
+# this is not a realistic attack vector. Revisit when rumqttc cuts a release
+# tracking rustls 0.23+.
+ignore = [
+    "RUSTSEC-2025-0134", # rustls-pemfile unmaintained (replaced by rustls-pki-types)
+    "RUSTSEC-2026-0049", # rustls-webpki: CRL DistributionPoint matching
+    "RUSTSEC-2026-0098", # rustls-webpki: URI name constraints
+    "RUSTSEC-2026-0099", # rustls-webpki: wildcard name constraints
+    "RUSTSEC-2026-0104", # rustls-webpki: CRL parse panic
+]
 
 [bans]
 multiple-versions = "warn"
