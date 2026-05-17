@@ -145,10 +145,20 @@ mod production {
 
             // ksni 0.3 doesn't surface post-init service termination, the
             // service is kept alive by the Handle. Hand the consumer a
-            // completion receiver that stays pending until shutdown.
-            let (_tx, rx) = tokio::sync::oneshot::channel();
+            // completion receiver that stays pending until shutdown: we keep
+            // the sender alive inside `KsniHandle` so the oneshot only fires
+            // (with `Err(RecvError)`) when the handle is dropped, by which
+            // point `tray::run`'s select loop has already exited via another
+            // arm. Without this, binding `_tx` would drop the sender at end
+            // of `spawn`, closing the channel immediately and making the
+            // completion arm of the select fire on the first poll, taking
+            // the whole app down.
+            let (completion_tx, rx) = tokio::sync::oneshot::channel();
             Ok(TrayServiceGuard {
-                handle: Box::new(KsniHandle { handle }),
+                handle: Box::new(KsniHandle {
+                    handle,
+                    _completion_tx: completion_tx,
+                }),
                 completion: rx,
             })
         }
@@ -156,6 +166,9 @@ mod production {
 
     struct KsniHandle {
         handle: ksni::Handle<RustiferinTray>,
+        // Held purely to keep the `completion` oneshot in `TrayServiceGuard`
+        // pending for the lifetime of the handle. See the comment in `spawn`.
+        _completion_tx: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
     }
 
     impl TrayHandle for KsniHandle {
