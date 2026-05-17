@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use rustiferin::stats::Stats;
 use rustiferin::tray::{self, RustiferinTray, TrayHandle, TrayServiceFactory, TrayServiceGuard};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -16,8 +17,9 @@ use tokio_util::sync::CancellationToken;
 
 struct FailingFactory;
 
+#[async_trait]
 impl TrayServiceFactory for FailingFactory {
-    fn spawn(&self, _tray: RustiferinTray) -> anyhow::Result<TrayServiceGuard> {
+    async fn spawn(&self, _tray: RustiferinTray) -> anyhow::Result<TrayServiceGuard> {
         anyhow::bail!("simulated: no StatusNotifier host")
     }
 }
@@ -61,8 +63,9 @@ struct OkFactory {
     shutdowns: Arc<AtomicUsize>,
 }
 
+#[async_trait]
 impl TrayServiceFactory for OkFactory {
-    fn spawn(&self, _tray: RustiferinTray) -> anyhow::Result<TrayServiceGuard> {
+    async fn spawn(&self, _tray: RustiferinTray) -> anyhow::Result<TrayServiceGuard> {
         let (tx, rx) = oneshot::channel();
         Ok(TrayServiceGuard {
             handle: Box::new(CountingHandle {
@@ -134,8 +137,9 @@ async fn run_returns_ok_and_shuts_down_handle_on_cancel() {
 async fn run_surfaces_completion_error_as_err() {
     struct ErrCompletionFactory;
 
+    #[async_trait]
     impl TrayServiceFactory for ErrCompletionFactory {
-        fn spawn(&self, _tray: RustiferinTray) -> anyhow::Result<TrayServiceGuard> {
+        async fn spawn(&self, _tray: RustiferinTray) -> anyhow::Result<TrayServiceGuard> {
             let (tx, rx) = oneshot::channel();
             // Service "succeeds" at init but immediately reports an error.
             let _ = tx.send(Err(anyhow::anyhow!("dbus session lost")));

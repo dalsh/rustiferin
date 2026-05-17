@@ -47,7 +47,7 @@ pub fn load(path: &Path) -> Result<Config> {
     }
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("reading config from {}", path.display()))?;
-    let cfg: Config = serde_yml::from_str(&text)
+    let cfg: Config = serde_yaml_ng::from_str(&text)
         .with_context(|| format!("parsing config from {}", path.display()))?;
     cfg.validate()
         .with_context(|| format!("validating config from {}", path.display()))?;
@@ -62,7 +62,7 @@ pub fn write_default(path: &Path) -> Result<()> {
         }
     }
     let cfg = Config::default();
-    let yaml = serde_yml::to_string(&cfg).context("serializing default config")?;
+    let yaml = serde_yaml_ng::to_string(&cfg).context("serializing default config")?;
     let contents = format!("{DEFAULT_HEADER}{yaml}");
     std::fs::write(path, contents)
         .with_context(|| format!("writing default config to {}", path.display()))?;
@@ -98,15 +98,15 @@ mod tests {
             h: 40,
         }];
 
-        let yaml = serde_yml::to_string(&cfg).expect("serialize");
-        let parsed: Config = serde_yml::from_str(&yaml).expect("deserialize");
+        let yaml = serde_yaml_ng::to_string(&cfg).expect("serialize");
+        let parsed: Config = serde_yaml_ng::from_str(&yaml).expect("deserialize");
         assert_eq!(cfg, parsed);
     }
 
     #[test]
     fn partial_yaml_fills_defaults() {
         let yaml = "mqtt:\n  broker_url: \"mqtt://10.0.0.1:1883\"\n";
-        let parsed: Config = serde_yml::from_str(yaml).expect("deserialize");
+        let parsed: Config = serde_yaml_ng::from_str(yaml).expect("deserialize");
         assert_eq!(parsed.mqtt.broker_url, "mqtt://10.0.0.1:1883");
         assert_eq!(parsed.capture.target_fps, 30);
         assert_eq!(parsed.color.gamma, 2.2);
@@ -239,7 +239,7 @@ mod tests {
         assert_eq!(cfg, Config::default());
 
         let on_disk = std::fs::read_to_string(&path).expect("read default");
-        let reparsed: Config = serde_yml::from_str(&on_disk).expect("parse default");
+        let reparsed: Config = serde_yaml_ng::from_str(&on_disk).expect("parse default");
         assert_eq!(reparsed, Config::default());
     }
 
@@ -318,6 +318,42 @@ mod tests {
                 max: 510
             }
         ));
+    }
+
+    #[test]
+    fn averaging_mode_default_is_mean() {
+        assert_eq!(Config::default().color.averaging, AveragingMode::Mean);
+    }
+
+    #[test]
+    fn averaging_mode_round_trips_through_yaml() {
+        let mut cfg = Config::default();
+        cfg.color.averaging = AveragingMode::DominantAdv;
+        let yaml = serde_yaml_ng::to_string(&cfg).expect("serialize");
+        assert!(
+            yaml.contains("averaging: dominant-adv"),
+            "expected kebab-case serialization, got:\n{yaml}"
+        );
+        let parsed: Config = serde_yaml_ng::from_str(&yaml).expect("deserialize");
+        assert_eq!(parsed.color.averaging, AveragingMode::DominantAdv);
+    }
+
+    #[test]
+    fn averaging_mode_accepts_kebab_case_in_yaml() {
+        let yaml = "color:\n  averaging: dominant-adv\n";
+        let parsed: Config = serde_yaml_ng::from_str(yaml).expect("deserialize kebab");
+        assert_eq!(parsed.color.averaging, AveragingMode::DominantAdv);
+    }
+
+    #[test]
+    fn averaging_mode_rejects_unknown_variant() {
+        let yaml = "color:\n  averaging: random\n";
+        let err = serde_yaml_ng::from_str::<Config>(yaml).expect_err("unknown variant rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("averaging") || msg.contains("variant"),
+            "error should mention the bad variant, got: {msg}"
+        );
     }
 
     #[test]
