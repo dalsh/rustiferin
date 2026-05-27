@@ -14,13 +14,37 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
+use crate::runtime::BrightnessGain;
 use crate::stats::Stats;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Preset values offered by the tray's "Brightness" radio submenu. Index
+/// alignment with `BRIGHTNESS_GAIN_LABELS` is load-bearing; keep in sync.
+pub const BRIGHTNESS_GAIN_PRESETS: &[f32] = &[0.8, 1.0, 1.2, 1.5, 2.0, 3.0];
+pub const BRIGHTNESS_GAIN_LABELS: &[&str] =
+    &["0.8x", "1.0x (default)", "1.2x", "1.5x", "2.0x", "3.0x"];
+
+/// Index of the preset closest to `value` (Euclidean on the scalar). Used to
+/// drive the radio group's `selected` field.
+pub fn closest_preset_index(value: f32) -> usize {
+    BRIGHTNESS_GAIN_PRESETS
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            (*a - value)
+                .abs()
+                .partial_cmp(&(*b - value).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| i)
+        .unwrap_or(1)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrayCommand {
     ToggleRun,
     Quit,
     OpenConfig,
+    SetBrightnessGain(f32),
 }
 
 /// Owned by the tray service. Shares stats + the running flag with the async
@@ -29,14 +53,20 @@ pub struct RustiferinTray {
     stats: Arc<ArcSwap<Stats>>,
     commands: mpsc::Sender<TrayCommand>,
     running: Arc<AtomicBool>,
+    brightness_gain: BrightnessGain,
 }
 
 impl RustiferinTray {
-    pub fn new(initial_stats: Stats, commands: mpsc::Sender<TrayCommand>) -> Self {
+    pub fn new(
+        initial_stats: Stats,
+        commands: mpsc::Sender<TrayCommand>,
+        brightness_gain: BrightnessGain,
+    ) -> Self {
         Self {
             stats: Arc::new(ArcSwap::from_pointee(initial_stats)),
             commands,
             running: Arc::new(AtomicBool::new(true)),
+            brightness_gain,
         }
     }
 
@@ -67,10 +97,11 @@ pub async fn run(
     factory: Box<dyn TrayServiceFactory>,
     mut stats_in: watch::Receiver<Stats>,
     commands_out: mpsc::Sender<TrayCommand>,
+    brightness_gain: BrightnessGain,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     let initial = *stats_in.borrow();
-    let tray = RustiferinTray::new(initial, commands_out);
+    let tray = RustiferinTray::new(initial, commands_out, brightness_gain);
     let stats_shared = tray.stats_handle();
 
     let TrayServiceGuard {
@@ -112,10 +143,13 @@ mod production {
 
     use anyhow::Context;
     use async_trait::async_trait;
-    use ksni::menu::StandardItem;
+    use ksni::menu::{RadioGroup, RadioItem, StandardItem, SubMenu};
     use ksni::TrayMethods;
 
-    use super::{RustiferinTray, TrayCommand, TrayHandle, TrayServiceFactory, TrayServiceGuard};
+    use super::{
+        closest_preset_index, RustiferinTray, TrayCommand, TrayHandle, TrayServiceFactory,
+        TrayServiceGuard, BRIGHTNESS_GAIN_LABELS, BRIGHTNESS_GAIN_PRESETS,
+    };
 
     pub struct ProductionTrayServiceFactory;
 
@@ -212,6 +246,14 @@ mod production {
         }
         fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
             let running = self.running.load(Ordering::Relaxed);
+            let current_gain = self.brightness_gain.load();
+            let brightness_options: Vec<RadioItem> = BRIGHTNESS_GAIN_LABELS
+                .iter()
+                .map(|label| RadioItem {
+                    label: (*label).into(),
+                    ..Default::default()
+                })
+                .collect();
             vec![
                 StandardItem {
                     label: if running {
@@ -223,6 +265,24 @@ mod production {
                         this.running.fetch_xor(true, Ordering::AcqRel);
                         let _ = this.commands.try_send(TrayCommand::ToggleRun);
                     }),
+                    ..Default::default()
+                }
+                .into(),
+                ksni::MenuItem::Separator,
+                SubMenu {
+                    label: "Brightness".into(),
+                    submenu: vec![RadioGroup {
+                        selected: closest_preset_index(current_gain),
+                        select: Box::new(|this: &mut Self, index: usize| {
+                            if let Some(&value) = BRIGHTNESS_GAIN_PRESETS.get(index) {
+                                let _ = this
+                                    .commands
+                                    .try_send(TrayCommand::SetBrightnessGain(value));
+                            }
+                        }),
+                        options: brightness_options,
+                    }
+                    .into()],
                     ..Default::default()
                 }
                 .into(),

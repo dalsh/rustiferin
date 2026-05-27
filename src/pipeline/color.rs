@@ -154,6 +154,25 @@ pub fn luminosity_floor(leds: &mut [LedColor], floor: f32) {
     }
 }
 
+/// Multiply each LED's channels by `gain`. When the boosted peak channel would
+/// exceed 255, the LED is scaled uniformly down to fit, so hue is preserved
+/// rather than hard-clipped. Identity when `gain == 1.0`.
+pub fn brightness_gain(leds: &mut [LedColor], gain: f32) {
+    if gain == 1.0 {
+        return;
+    }
+    for led in leds.iter_mut() {
+        let r = led.r as f32 * gain;
+        let g = led.g as f32 * gain;
+        let b = led.b as f32 * gain;
+        let peak = r.max(g).max(b);
+        let scale = if peak > 255.0 { 255.0 / peak } else { 1.0 };
+        led.r = (r * scale).round().clamp(0.0, 255.0) as u8;
+        led.g = (g * scale).round().clamp(0.0, 255.0) as u8;
+        led.b = (b * scale).round().clamp(0.0, 255.0) as u8;
+    }
+}
+
 /// Clamp each LED so `max(r, g, b) <= max_byte` by uniform per-LED scaling.
 pub fn brightness_limit(leds: &mut [LedColor], max_byte: u8) {
     if max_byte == u8::MAX {
@@ -427,6 +446,50 @@ mod tests {
         night_light(&mut light, 0.3);
         night_light(&mut heavy, 0.8);
         assert!(heavy[0].b <= light[0].b);
+    }
+
+    #[test]
+    fn brightness_gain_one_is_identity() {
+        let mut leds = vec![LedColor::new(0, 0, 0), LedColor::new(80, 120, 200)];
+        let snapshot = leds.clone();
+        brightness_gain(&mut leds, 1.0);
+        assert_eq!(leds, snapshot);
+    }
+
+    #[test]
+    fn brightness_gain_half_darkens() {
+        let mut leds = vec![LedColor::new(80, 120, 200)];
+        brightness_gain(&mut leds, 0.5);
+        assert_eq!(leds[0], LedColor::new(40, 60, 100));
+    }
+
+    #[test]
+    fn brightness_gain_double_brightens_with_headroom() {
+        let mut leds = vec![LedColor::new(40, 60, 100)];
+        brightness_gain(&mut leds, 2.0);
+        // Peak after gain is 200 (well under 255): straight multiply.
+        assert_eq!(leds[0], LedColor::new(80, 120, 200));
+    }
+
+    #[test]
+    fn brightness_gain_preserves_hue_on_saturation() {
+        // (200, 100, 50) * 2.0 = (400, 200, 100). Peak overshoots 255 by 400/255,
+        // so the LED is scaled uniformly down: factor = 255/400 = 0.6375.
+        // Expected: (255, 128, 64), preserving the original 4:2:1 ratio.
+        let mut leds = vec![LedColor::new(200, 100, 50)];
+        brightness_gain(&mut leds, 2.0);
+        let out = leds[0];
+        assert_eq!(out.r, 255);
+        assert!(
+            (127..=129).contains(&out.g),
+            "expected g~128 (hue-preserving), got {}",
+            out.g
+        );
+        assert!(
+            (63..=65).contains(&out.b),
+            "expected b~64 (hue-preserving), got {}",
+            out.b
+        );
     }
 
     #[test]

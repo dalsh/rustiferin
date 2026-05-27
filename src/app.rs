@@ -96,6 +96,7 @@ pub async fn run(
             metrics.clone(),
         );
 
+        let brightness_gain = crate::runtime::BrightnessGain::new(config.color.brightness_gain);
         pipeline::spawn(
             &mut shutdown,
             config.clone(),
@@ -104,6 +105,7 @@ pub async fn run(
             leds_tx,
             pipeline_ctrl_rx,
             metrics.clone(),
+            brightness_gain.clone(),
         )
         .context("spawning pipeline thread")?;
 
@@ -142,6 +144,7 @@ pub async fn run(
                     config_path.clone(),
                     _stats_rx_for_tray,
                     pipeline_ctrl_for_tray,
+                    brightness_gain.clone(),
                 );
             }
         }
@@ -169,16 +172,19 @@ fn spawn_tray(
     config_path: PathBuf,
     stats_rx: watch::Receiver<Stats>,
     pipeline_ctrl_tx: mpsc::Sender<PipelineCommand>,
+    brightness_gain: crate::runtime::BrightnessGain,
 ) {
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<TrayCommand>(8);
     let cancel = shutdown.token();
 
+    let brightness_gain_for_tray = brightness_gain.clone();
     shutdown.spawn(
         "tray",
         tray::run(
             Box::new(ProductionTrayServiceFactory::new()),
             stats_rx,
             cmd_tx,
+            brightness_gain_for_tray,
             cancel.clone(),
         ),
     );
@@ -205,6 +211,17 @@ fn spawn_tray(
                     let path = config_path.clone();
                     if let Err(e) = std::process::Command::new("xdg-open").arg(&path).spawn() {
                         tracing::warn!(error = ?e, path = %path.display(), "xdg-open failed");
+                    }
+                }
+                TrayCommand::SetBrightnessGain(value) => {
+                    tracing::info!(value, "tray: brightness_gain set");
+                    brightness_gain.store(value);
+                    let path = config_path.clone();
+                    // Persistence is best-effort: if the YAML write fails we log
+                    // and leave the in-memory atomic updated. Next launch falls
+                    // back to whatever is still on disk.
+                    if let Err(e) = crate::config::update_brightness_gain(&path, value) {
+                        tracing::warn!(error = ?e, path = %path.display(), "persisting brightness_gain failed");
                     }
                 }
             }

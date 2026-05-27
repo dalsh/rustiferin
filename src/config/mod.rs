@@ -54,6 +54,19 @@ pub fn load(path: &Path) -> Result<Config> {
     Ok(cfg)
 }
 
+/// Update only `color.brightness_gain` on disk. Re-serialises the whole
+/// config (so any hand-written comments in the YAML are lost). Validates the
+/// new value before writing so an invalid number cannot corrupt the file.
+pub fn update_brightness_gain(path: &Path, value: f32) -> Result<()> {
+    let mut cfg = load(path).context("loading config before brightness_gain update")?;
+    cfg.color.brightness_gain = value;
+    cfg.validate()
+        .with_context(|| format!("brightness_gain={value} failed validation"))?;
+    let yaml = serde_yaml_ng::to_string(&cfg).context("serializing config")?;
+    std::fs::write(path, yaml).with_context(|| format!("writing config to {}", path.display()))?;
+    Ok(())
+}
+
 pub fn write_default(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -154,6 +167,61 @@ mod tests {
         cfg.color.gamma = 5.5;
         let err = cfg.validate().expect_err("gamma too high");
         assert!(matches!(err, ConfigError::InvalidGamma(_)));
+    }
+
+    #[test]
+    fn update_brightness_gain_persists_to_yaml() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("config.yaml");
+        // Seed a default config on disk.
+        write_default(&path).expect("write default");
+        // Mutate just the gain.
+        update_brightness_gain(&path, 2.5).expect("persist gain");
+        // Reload and verify only the gain changed.
+        let reloaded = load(&path).expect("reload");
+        assert_eq!(reloaded.color.brightness_gain, 2.5);
+        // Other defaults preserved.
+        assert_eq!(reloaded.color.gamma, 2.2);
+    }
+
+    #[test]
+    fn update_brightness_gain_rejects_invalid_value() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("config.yaml");
+        write_default(&path).expect("write default");
+        let err = update_brightness_gain(&path, 0.0).expect_err("zero rejected");
+        // Make sure the on-disk file was not clobbered when validation fails.
+        let reloaded = load(&path).expect("reload");
+        assert_eq!(reloaded.color.brightness_gain, 1.0);
+        // Surface check: error message mentions brightness_gain so users get a clue.
+        let msg = format!("{:#}", err);
+        assert!(
+            msg.contains("brightness_gain"),
+            "error should mention field name, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_brightness_gain_zero() {
+        let mut cfg = Config::default();
+        cfg.color.brightness_gain = 0.0;
+        let err = cfg.validate().expect_err("brightness_gain zero");
+        assert!(matches!(err, ConfigError::InvalidBrightnessGain(_)));
+    }
+
+    #[test]
+    fn validate_rejects_brightness_gain_too_high() {
+        let mut cfg = Config::default();
+        cfg.color.brightness_gain = 11.0;
+        let err = cfg.validate().expect_err("brightness_gain too high");
+        assert!(matches!(err, ConfigError::InvalidBrightnessGain(_)));
+    }
+
+    #[test]
+    fn validate_accepts_brightness_gain_default() {
+        let cfg = Config::default();
+        assert_eq!(cfg.color.brightness_gain, 1.0);
+        cfg.validate().expect("default brightness_gain valid");
     }
 
     #[test]

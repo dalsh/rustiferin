@@ -32,7 +32,13 @@ async fn run_returns_err_when_factory_fails() {
 
     let result = timeout(
         Duration::from_secs(2),
-        tray::run(Box::new(FailingFactory), stats_rx, cmd_tx, cancel),
+        tray::run(
+            Box::new(FailingFactory),
+            stats_rx,
+            cmd_tx,
+            rustiferin::runtime::BrightnessGain::default(),
+            cancel,
+        ),
     )
     .await
     .expect("tray::run must complete within timeout");
@@ -92,7 +98,13 @@ async fn run_returns_ok_and_shuts_down_handle_on_cancel() {
     });
 
     let inner_cancel = cancel.clone();
-    let join = tokio::spawn(tray::run(factory, stats_rx, cmd_tx, inner_cancel));
+    let join = tokio::spawn(tray::run(
+        factory,
+        stats_rx,
+        cmd_tx,
+        rustiferin::runtime::BrightnessGain::default(),
+        inner_cancel,
+    ));
 
     // Push a stats update; the tray must call `handle.update()` in response.
     stats_tx
@@ -162,7 +174,13 @@ async fn run_surfaces_completion_error_as_err() {
 
     let result = timeout(
         Duration::from_secs(2),
-        tray::run(Box::new(ErrCompletionFactory), stats_rx, cmd_tx, cancel),
+        tray::run(
+            Box::new(ErrCompletionFactory),
+            stats_rx,
+            cmd_tx,
+            rustiferin::runtime::BrightnessGain::default(),
+            cancel,
+        ),
     )
     .await
     .expect("tray::run completes within timeout");

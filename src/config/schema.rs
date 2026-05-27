@@ -143,6 +143,11 @@ pub struct ColorConfig {
     pub white_balance_kelvin: u32,
     pub night_light_strength: f32,
     pub brightness_max: u8,
+    /// Linear multiplier applied to every channel before the brightness limit.
+    /// `1.0` is the no-op default. Values > 1 brighten the strip; when the boost
+    /// would push a channel past 255 the LED is scaled uniformly to keep hue.
+    /// Validated range: `(0.0, 10.0]`.
+    pub brightness_gain: f32,
     pub hsl_offsets: HslOffsets,
     /// Minimum HSB brightness floor in `[0, 1]`. Any LED that would otherwise
     /// fall below this after gamma is boosted up to it (preserving hue/sat).
@@ -160,6 +165,7 @@ impl Default for ColorConfig {
             white_balance_kelvin: 6500,
             night_light_strength: 0.0,
             brightness_max: 255,
+            brightness_gain: 1.0,
             hsl_offsets: HslOffsets::default(),
             luminosity_floor: 0.0,
             averaging: AveragingMode::default(),
@@ -246,6 +252,8 @@ pub enum ConfigError {
     InvalidNightLightStrength(f32),
     #[error("color.luminosity_floor must be in [0.0, 1.0], got {0}")]
     InvalidLuminosityFloor(f32),
+    #[error("color.brightness_gain must be in (0.0, 10.0], got {0}")]
+    InvalidBrightnessGain(f32),
     #[error("mqtt.broker_url is not a valid URL: {0}")]
     InvalidBrokerUrl(String),
     #[error("mqtt.broker_url scheme must be `mqtt` or `mqtts`, got `{0}`")]
@@ -304,6 +312,10 @@ impl Config {
         let lf = self.color.luminosity_floor;
         if !(0.0..=1.0).contains(&lf) {
             return Err(ConfigError::InvalidLuminosityFloor(lf));
+        }
+        let bg = self.color.brightness_gain;
+        if !(bg > 0.0 && bg <= 10.0) {
+            return Err(ConfigError::InvalidBrightnessGain(bg));
         }
         let url = url::Url::parse(&self.mqtt.broker_url)
             .map_err(|e| ConfigError::InvalidBrokerUrl(e.to_string()))?;

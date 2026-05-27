@@ -154,6 +154,7 @@ pub async fn run_e2e(
             leds_tx,
             ctrl_rx,
             rustiferin::stats::Metrics::new(),
+            rustiferin::runtime::BrightnessGain::default(),
             cancel_t,
         );
     });

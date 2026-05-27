@@ -79,9 +79,19 @@ pub fn spawn(
     leds_out: watch::Sender<LedFrame>,
     control: mpsc::Receiver<PipelineCommand>,
     metrics: crate::stats::Metrics,
+    brightness_gain: crate::runtime::BrightnessGain,
 ) -> std::io::Result<()> {
     shutdown.spawn_os_thread("pipeline", move |cancel| {
-        run_loop(config, pool, frames_in, leds_out, control, metrics, cancel);
+        run_loop(
+            config,
+            pool,
+            frames_in,
+            leds_out,
+            control,
+            metrics,
+            brightness_gain,
+            cancel,
+        );
         Ok(())
     })
 }
@@ -96,6 +106,7 @@ pub fn run_loop(
     leds_out: watch::Sender<LedFrame>,
     mut control: mpsc::Receiver<PipelineCommand>,
     metrics: crate::stats::Metrics,
+    brightness_gain: crate::runtime::BrightnessGain,
     cancel: CancellationToken,
 ) {
     let span = tracing::info_span!("pipeline");
@@ -174,6 +185,7 @@ pub fn run_loop(
         // Floor runs *after* gamma so it lifts the gamma-darkened output, matching
         // Firefly's ImageProcessor.correctColors ordering.
         color::luminosity_floor(&mut scratch, config.color.luminosity_floor);
+        color::brightness_gain(&mut scratch, brightness_gain.load());
         color::brightness_limit(&mut scratch, config.color.brightness_max);
         ema.step(&mut scratch, config.smoothing.ema_alpha);
 
@@ -268,6 +280,7 @@ mod tests {
                 leds_tx,
                 ctrl_rx,
                 crate::stats::Metrics::new(),
+                crate::runtime::BrightnessGain::default(),
                 cancel_for_thread,
             );
         });
