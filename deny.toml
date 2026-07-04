@@ -37,6 +37,14 @@ ignore = [
     "RUSTSEC-2026-0098", # rustls-webpki: URI name constraints
     "RUSTSEC-2026-0099", # rustls-webpki: wildcard name constraints
     "RUSTSEC-2026-0104", # rustls-webpki: CRL parse panic
+    # quick-xml 0.39 is a build-time-only dependency: wayland-scanner (a
+    # proc-macro) uses it to parse the trusted Wayland protocol XML shipped
+    # with the crate at compile time. Both advisories are runtime-parsing DoS
+    # vectors against untrusted XML, which never reaches this path. wayland-scanner
+    # pins quick-xml = "^0.39" so we cannot bump to the fixed 0.41 without moving
+    # the whole wayland stack. Revisit when wayland-scanner allows quick-xml 0.41+.
+    "RUSTSEC-2026-0194", # quick-xml: quadratic run time on duplicate attribute names
+    "RUSTSEC-2026-0195", # quick-xml: unbounded namespace-declaration allocation
 ]
 
 [bans]
