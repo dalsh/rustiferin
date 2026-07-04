@@ -38,7 +38,9 @@ pub fn identity_config(zones: Vec<LedZone>, reference_width: u32, reference_heig
             hsl_offsets: HslOffsets::default(),
             ..Default::default()
         },
-        smoothing: SmoothingConfig { ema_alpha: 1.0 },
+        smoothing: SmoothingConfig {
+            time_constant_ms: 0.0,
+        },
         ..Default::default()
     }
 }

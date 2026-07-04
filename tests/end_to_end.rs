@@ -104,12 +104,12 @@ async fn ema_smoothing_converges_over_repeated_frames() {
         4,
         4,
     );
-    cfg.smoothing.ema_alpha = 0.5;
+    cfg.smoothing.time_constant_ms = 50.0;
     let frames_in: Vec<_> = (0..20)
         .map(|_| solid_color_frame(4, 4, 0, 0, 255))
         .collect();
     let observed = run_e2e(cfg, frames_in, 1).await;
-    // After many feeds of the same color with alpha=0.5 the EMA is within 1 LSB.
+    // Feeding the same color repeatedly, the EMA settles onto it within 1 LSB.
     let last = observed.last().expect("at least one frame");
     assert_color_near(last.colors[0], (255, 0, 0), 1);
 }
