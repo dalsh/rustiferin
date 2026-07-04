@@ -11,6 +11,7 @@ pub mod smoothing;
 pub mod zones;
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
@@ -119,6 +120,8 @@ pub fn run_loop(
     );
 
     let mut ema = EmaState::default();
+    let mut last_smoothing_step: Option<Instant> = None;
+    let tau_secs = config.smoothing.time_constant_ms / 1000.0;
     let zone_count = config.led_matrix.zones.len();
     let mut scratch: Vec<LedColor> = vec![LedColor::default(); zone_count];
     // Reused linear-light pixel buffer for dominant-adv averaging. Stays
@@ -187,7 +190,15 @@ pub fn run_loop(
         color::luminosity_floor(&mut scratch, config.color.luminosity_floor);
         color::brightness_gain(&mut scratch, brightness_gain.load());
         color::brightness_limit(&mut scratch, config.color.brightness_max);
-        ema.step(&mut scratch, config.smoothing.ema_alpha);
+        let now = Instant::now();
+        let dt = last_smoothing_step
+            .map(|prev| now.duration_since(prev).as_secs_f32())
+            .unwrap_or(0.0);
+        last_smoothing_step = Some(now);
+        ema.step(
+            &mut scratch,
+            smoothing::alpha_from_time_constant(dt, tau_secs),
+        );
 
         pool.release(frame.buf);
 
@@ -251,7 +262,9 @@ mod tests {
                 hsl_offsets: Default::default(),
                 ..Default::default()
             },
-            smoothing: crate::config::schema::SmoothingConfig { ema_alpha: 1.0 },
+            smoothing: crate::config::schema::SmoothingConfig {
+                time_constant_ms: 0.0,
+            },
             ..Default::default()
         }
     }

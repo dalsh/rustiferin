@@ -38,14 +38,19 @@ led_matrix:
 #   night_light_strength: 0.0
 #   luminosity_floor: 0.0
 #   # Per-zone pixel-to-LED reduction. `mean` is the default arithmetic
-#   # linear-light average. `dominant-adv` runs a k-means clustering pass
-#   # that picks the most-represented colour per zone; trades a bit of CPU
-#   # for punchier output on high-contrast content (games), at the cost of
-#   # occasional flicker on scene cuts.
+#   # linear-light average. `mean-squared` is the root-mean-square of the
+#   # same values: continuous like `mean` but biased toward bright pixels
+#   # (matches Hyperion's multicolor_mean_squared). `dominant-adv` runs a
+#   # k-means clustering pass that picks the most-represented colour per
+#   # zone; punchier on high-contrast content (games) but can flicker on
+#   # scene cuts because it snaps between clusters.
 #   averaging: mean
 #
 # smoothing:
-#   ema_alpha: 0.5
+#   # Exponential-smoothing time constant in milliseconds (frame-rate
+#   # independent): wall-clock time to close ~63% of the gap to a new
+#   # colour. Higher is smoother/slower; 0.0 disables smoothing.
+#   time_constant_ms: 50.0
 #
 # power:
 #   respect_screensaver: true

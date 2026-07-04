@@ -91,6 +91,7 @@ pub fn average_zones(
         } else {
             match mode {
                 AveragingMode::Mean => average_pixels(frame, &scaled, step),
+                AveragingMode::MeanSquared => mean_squared_pixels(frame, &scaled, step),
                 AveragingMode::DominantAdv => {
                     dominant_adv_pixels(frame, &scaled, step, dominant_scratch)
                 }
@@ -99,38 +100,53 @@ pub fn average_zones(
     }
 }
 
-fn average_pixels(frame: &Frame, zone: &ScaledZone, step: u32) -> LedColor {
+/// Walk every `step`-th pixel in `zone`, decode it to linear light, and hand the
+/// three channels to `f`. Returns the number of pixels visited. Rows that would
+/// over-read a malformed `stride` are skipped rather than crashing.
+fn fold_zone_linear<F: FnMut(f32, f32, f32)>(
+    frame: &Frame,
+    zone: &ScaledZone,
+    step: u32,
+    mut f: F,
+) -> u32 {
     let (r_idx, g_idx, b_idx) = channel_offsets(frame.format);
     let stride = frame.stride as usize;
     let bytes_per_px = pixel_size(frame.format);
     let decode = &*SRGB_DECODE;
 
-    let mut sum_r: f32 = 0.0;
-    let mut sum_g: f32 = 0.0;
-    let mut sum_b: f32 = 0.0;
     let mut count: u32 = 0;
-
     let mut dy = 0u32;
     while dy < zone.h {
         let row_start = (zone.y + dy) as usize * stride;
         let mut dx = 0u32;
         while dx < zone.w {
             let px = row_start + (zone.x + dx) as usize * bytes_per_px;
-            // Boundary defence: a malformed `stride` should not crash the pipeline.
-            // Skip the row if it would over-read.
             if px + bytes_per_px > frame.buf.len() {
                 dx += step;
                 continue;
             }
-            sum_r += decode[frame.buf[px + r_idx] as usize];
-            sum_g += decode[frame.buf[px + g_idx] as usize];
-            sum_b += decode[frame.buf[px + b_idx] as usize];
+            f(
+                decode[frame.buf[px + r_idx] as usize],
+                decode[frame.buf[px + g_idx] as usize],
+                decode[frame.buf[px + b_idx] as usize],
+            );
             count += 1;
             dx += step;
         }
         dy += step;
     }
+    count
+}
 
+fn average_pixels(frame: &Frame, zone: &ScaledZone, step: u32) -> LedColor {
+    let mut sum_r = 0.0f32;
+    let mut sum_g = 0.0f32;
+    let mut sum_b = 0.0f32;
+    let count = fold_zone_linear(frame, zone, step, |r, g, b| {
+        sum_r += r;
+        sum_g += g;
+        sum_b += b;
+    });
     if count == 0 {
         return LedColor::default();
     }
@@ -139,6 +155,30 @@ fn average_pixels(frame: &Frame, zone: &ScaledZone, step: u32) -> LedColor {
         r: srgb_encode(sum_r / n),
         g: srgb_encode(sum_g / n),
         b: srgb_encode(sum_b / n),
+    }
+}
+
+/// Root-mean-square of the linear-light channels. RMS >= arithmetic mean, so
+/// zones with bright spots come out brighter than [`average_pixels`] would give.
+/// Hyperion computes this on gamma-encoded bytes; we stay in linear light for
+/// consistency with our `Mean` mode.
+fn mean_squared_pixels(frame: &Frame, zone: &ScaledZone, step: u32) -> LedColor {
+    let mut sum_r = 0.0f32;
+    let mut sum_g = 0.0f32;
+    let mut sum_b = 0.0f32;
+    let count = fold_zone_linear(frame, zone, step, |r, g, b| {
+        sum_r += r * r;
+        sum_g += g * g;
+        sum_b += b * b;
+    });
+    if count == 0 {
+        return LedColor::default();
+    }
+    let n = count as f32;
+    LedColor {
+        r: srgb_encode((sum_r / n).sqrt()),
+        g: srgb_encode((sum_g / n).sqrt()),
+        b: srgb_encode((sum_b / n).sqrt()),
     }
 }
 
@@ -209,6 +249,82 @@ mod tests {
             &mut out,
         );
         assert_eq!(out[0], LedColor::new(255, 0, 0));
+    }
+
+    #[test]
+    fn mean_squared_uniform_zone_matches_input() {
+        // Every pixel identical -> RMS equals that value, same as the mean.
+        let frame = solid_bgra(8, 8, 0, 0, 255);
+        let cfg = full_zone(8, 8);
+        let mut out = vec![LedColor::default(); 1];
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::MeanSquared,
+            &mut Vec::new(),
+            &mut out,
+        );
+        assert_eq!(out[0], LedColor::new(255, 0, 0));
+    }
+
+    #[test]
+    fn mean_squared_all_black_is_black() {
+        let frame = solid_bgra(8, 8, 0, 0, 0);
+        let cfg = full_zone(8, 8);
+        let mut out = vec![LedColor::default(); 1];
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::MeanSquared,
+            &mut Vec::new(),
+            &mut out,
+        );
+        assert_eq!(out[0], LedColor::new(0, 0, 0));
+    }
+
+    #[test]
+    fn mean_squared_is_brighter_than_mean_on_high_contrast() {
+        // Left half fully red, right half black. RMS weights the bright pixels
+        // more than the arithmetic mean, so the red channel comes out higher
+        // while the untouched channels stay zero.
+        let mut frame = solid_bgra(8, 8, 0, 0, 0);
+        for y in 0..8 {
+            for x in 0..4 {
+                let p = (y * 8 + x) * 4;
+                frame.buf[p + 2] = 255;
+            }
+        }
+        let cfg = full_zone(8, 8);
+
+        let mut mean = vec![LedColor::default(); 1];
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::Mean,
+            &mut Vec::new(),
+            &mut mean,
+        );
+        let mut ms = vec![LedColor::default(); 1];
+        average_zones(
+            &frame,
+            &cfg,
+            1,
+            AveragingMode::MeanSquared,
+            &mut Vec::new(),
+            &mut ms,
+        );
+
+        assert!(
+            ms[0].r > mean[0].r,
+            "RMS red {} should exceed mean red {}",
+            ms[0].r,
+            mean[0].r
+        );
+        assert_eq!((ms[0].g, ms[0].b), (0, 0));
+        assert_eq!((mean[0].g, mean[0].b), (0, 0));
     }
 
     #[test]

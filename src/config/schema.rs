@@ -124,15 +124,18 @@ pub struct HslOffsets {
 
 /// How `pipeline::zones` collapses a zone's pixels to a single LED color.
 ///
-/// `Mean` is the arithmetic linear-light average; `DominantAdv` is a k-means
-/// clustering pass that picks the most-represented color. Dominant is the
-/// punchier option on high-contrast content where the mean would collapse
-/// toward grey.
+/// `Mean` is the arithmetic linear-light average; `MeanSquared` is the
+/// root-mean-square of the same linear values, which biases toward the bright
+/// pixels in a zone (Hyperion's `multicolor_mean_squared`); `DominantAdv` is a
+/// k-means clustering pass that picks the most-represented color. Mean and
+/// MeanSquared are continuous (they slide as content moves); Dominant is
+/// winner-take-all and snaps between clusters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum AveragingMode {
     #[default]
     Mean,
+    MeanSquared,
     DominantAdv,
 }
 
@@ -173,15 +176,21 @@ impl Default for ColorConfig {
     }
 }
 
+/// Temporal smoothing configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SmoothingConfig {
-    pub ema_alpha: f32,
+    /// Exponential-smoothing time constant in milliseconds: the wall-clock time
+    /// for the strip to close ~63% of the gap to a new color. Frame-rate
+    /// independent (unlike a per-frame alpha). `0.0` disables smoothing.
+    pub time_constant_ms: f32,
 }
 
 impl Default for SmoothingConfig {
     fn default() -> Self {
-        Self { ema_alpha: 0.5 }
+        Self {
+            time_constant_ms: 50.0,
+        }
     }
 }
 
@@ -246,8 +255,8 @@ pub enum ConfigError {
     },
     #[error("color.gamma must be in (0.0, 5.0], got {0}")]
     InvalidGamma(f32),
-    #[error("smoothing.ema_alpha must be in (0.0, 1.0], got {0}")]
-    InvalidEmaAlpha(f32),
+    #[error("smoothing.time_constant_ms must be in [0.0, 10000.0], got {0}")]
+    InvalidTimeConstant(f32),
     #[error("color.night_light_strength must be in [0.0, 1.0], got {0}")]
     InvalidNightLightStrength(f32),
     #[error("color.luminosity_floor must be in [0.0, 1.0], got {0}")]
@@ -302,8 +311,9 @@ impl Config {
         if !(self.color.gamma > 0.0 && self.color.gamma <= 5.0) {
             return Err(ConfigError::InvalidGamma(self.color.gamma));
         }
-        if !(self.smoothing.ema_alpha > 0.0 && self.smoothing.ema_alpha <= 1.0) {
-            return Err(ConfigError::InvalidEmaAlpha(self.smoothing.ema_alpha));
+        let tc = self.smoothing.time_constant_ms;
+        if !(tc.is_finite() && (0.0..=10_000.0).contains(&tc)) {
+            return Err(ConfigError::InvalidTimeConstant(tc));
         }
         let nls = self.color.night_light_strength;
         if !(0.0..=1.0).contains(&nls) {

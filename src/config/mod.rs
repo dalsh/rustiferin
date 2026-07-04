@@ -97,7 +97,7 @@ mod tests {
         cfg.color.white_balance_kelvin = 5500;
         cfg.color.brightness_max = 200;
         cfg.color.night_light_strength = 0.3;
-        cfg.smoothing.ema_alpha = 0.25;
+        cfg.smoothing.time_constant_ms = 25.0;
         cfg.mqtt.broker_url = "mqtts://broker.local:8883".into();
         cfg.mqtt.username = Some("alice".into());
         cfg.mqtt.password = Some("secret".into());
@@ -225,19 +225,19 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_ema_alpha_zero() {
+    fn validate_rejects_time_constant_negative() {
         let mut cfg = Config::default();
-        cfg.smoothing.ema_alpha = 0.0;
-        let err = cfg.validate().expect_err("ema_alpha zero");
-        assert!(matches!(err, ConfigError::InvalidEmaAlpha(_)));
+        cfg.smoothing.time_constant_ms = -1.0;
+        let err = cfg.validate().expect_err("negative time constant");
+        assert!(matches!(err, ConfigError::InvalidTimeConstant(_)));
     }
 
     #[test]
-    fn validate_rejects_ema_alpha_above_one() {
+    fn validate_accepts_time_constant_zero() {
+        // Zero means "no smoothing" (pass-through), a legitimate choice.
         let mut cfg = Config::default();
-        cfg.smoothing.ema_alpha = 1.5;
-        let err = cfg.validate().expect_err("ema_alpha above 1");
-        assert!(matches!(err, ConfigError::InvalidEmaAlpha(_)));
+        cfg.smoothing.time_constant_ms = 0.0;
+        cfg.validate().expect("zero time constant valid");
     }
 
     #[test]
