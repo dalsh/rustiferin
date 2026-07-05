@@ -87,19 +87,43 @@ pub async fn run(
             .join("rustiferin")
             .join("restore_token");
         let target_fps = config.capture.target_fps;
-        let portal = PortalCapture::new(restore_path, target_fps);
-        capture::spawn(
-            &mut shutdown,
-            portal,
-            pool.clone(),
-            frame_slot.clone(),
-            metrics.clone(),
-        );
+        match config.capture.backend {
+            crate::config::schema::CaptureBackend::Portal => {
+                let portal = PortalCapture::new(restore_path, target_fps);
+                capture::spawn(
+                    &mut shutdown,
+                    portal,
+                    pool.clone(),
+                    frame_slot.clone(),
+                    metrics.clone(),
+                );
+            }
+            crate::config::schema::CaptureBackend::Kms => {
+                spawn_kms_capture(
+                    &mut shutdown,
+                    &config,
+                    target_fps,
+                    pool.clone(),
+                    frame_slot.clone(),
+                    metrics.clone(),
+                )?;
+            }
+        }
 
         let brightness_gain = crate::runtime::BrightnessGain::new(config.color.brightness_gain);
+        // The KMS backend GPU-downscales frames, so the pipeline should sample
+        // every pixel of the small frame rather than subsample it a second time.
+        let pipeline_config =
+            if config.capture.backend == crate::config::schema::CaptureBackend::Kms {
+                let mut c = (*config).clone();
+                c.capture.subsample = 1;
+                Arc::new(c)
+            } else {
+                config.clone()
+            };
         pipeline::spawn(
             &mut shutdown,
-            config.clone(),
+            pipeline_config,
             pool,
             frame_slot,
             leds_tx,
@@ -155,6 +179,41 @@ pub async fn run(
         tracing::info!("shutdown complete");
         Ok(())
     }
+}
+
+/// Resolve the KMS capture card (config override or auto-detect) and its render
+/// node, then spawn the KMS capture source. Fails fast if resolution fails or
+/// the `kms` feature is absent.
+#[cfg(all(feature = "wayland", feature = "mqtt", feature = "kms"))]
+fn spawn_kms_capture(
+    shutdown: &mut Shutdown,
+    config: &crate::config::schema::Config,
+    target_fps: u32,
+    pool: FramePool,
+    frame_slot: FrameSlot,
+    metrics: crate::stats::Metrics,
+) -> anyhow::Result<()> {
+    use crate::capture::kms::{capture::KmsCapture, detect_capture_card, resolve_render_node};
+    let card = match &config.capture.kms_card {
+        Some(c) => c.clone(),
+        None => detect_capture_card().context("auto-detecting KMS capture card")?,
+    };
+    let render_node = resolve_render_node(&card).context("resolving render node for KMS card")?;
+    let kms = KmsCapture::new(card, render_node, target_fps);
+    capture::spawn(shutdown, kms, pool, frame_slot, metrics);
+    Ok(())
+}
+
+#[cfg(all(feature = "wayland", feature = "mqtt", not(feature = "kms")))]
+fn spawn_kms_capture(
+    _shutdown: &mut Shutdown,
+    _config: &crate::config::schema::Config,
+    _target_fps: u32,
+    _pool: FramePool,
+    _frame_slot: FrameSlot,
+    _metrics: crate::stats::Metrics,
+) -> anyhow::Result<()> {
+    anyhow::bail!("capture.backend is `kms` but rustiferin was built without the `kms` feature")
 }
 
 /// Spawn the tray task and a small router that translates [`TrayCommand`]s into

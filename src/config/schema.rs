@@ -42,6 +42,24 @@ pub struct CaptureConfig {
     /// 4 = 16× less pixel work per frame, irrelevant for averaging because
     /// each zone still gets hundreds of samples at typical strip sizes.
     pub subsample: u32,
+    /// Frame source. `Portal` uses the xdg-desktop-portal PipeWire screencast
+    /// (works everywhere, but forces compositor composition -> costs fullscreen
+    /// game FPS). `Kms` reads the scanout buffer directly via gpu-screen-recorder's
+    /// `gsr-kms-server` helper, bypassing the compositor (near-zero game impact);
+    /// it requires the `gpu-screen-recorder` package and the `kms` build feature.
+    pub backend: CaptureBackend,
+    /// KMS backend only: DRM card to capture, e.g. `/dev/dri/card1`. `None`
+    /// auto-detects the card driving a connected display. Ignored by `Portal`.
+    pub kms_card: Option<String>,
+}
+
+/// Which capture path feeds the pipeline. See [`CaptureConfig::backend`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaptureBackend {
+    #[default]
+    Portal,
+    Kms,
 }
 
 impl Default for CaptureConfig {
@@ -50,6 +68,8 @@ impl Default for CaptureConfig {
             target_fps: 30,
             monitor_index: None,
             subsample: 4,
+            backend: CaptureBackend::Portal,
+            kms_card: None,
         }
     }
 }

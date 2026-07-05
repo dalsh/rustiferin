@@ -6,6 +6,9 @@
 #[cfg(feature = "wayland")]
 pub mod portal;
 
+#[cfg(feature = "kms")]
+pub mod kms;
+
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 

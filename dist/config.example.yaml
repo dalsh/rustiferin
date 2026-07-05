@@ -30,6 +30,16 @@ led_matrix:
 #
 # capture:
 #   target_fps: 30
+#   # Frame source. `portal` (default) uses the xdg-desktop-portal PipeWire
+#   # screencast: works on any setup, but forces the compositor to composite,
+#   # which costs a fullscreen game its direct-scanout framerate. `kms` reads
+#   # the scanout buffer directly through gpu-screen-recorder's gsr-kms-server
+#   # helper, bypassing the compositor (near-zero game impact). `kms` requires
+#   # the gpu-screen-recorder package installed.
+#   backend: portal
+#   # KMS only: DRM card to capture (e.g. /dev/dri/card1). Omit to auto-detect
+#   # the card driving a connected display.
+#   kms_card: null
 #
 # color:
 #   gamma: 2.2

@@ -225,6 +225,30 @@ mod tests {
     }
 
     #[test]
+    fn capture_backend_defaults_to_portal() {
+        assert_eq!(
+            Config::default().capture.backend,
+            crate::config::schema::CaptureBackend::Portal
+        );
+    }
+
+    #[test]
+    fn capture_backend_kms_round_trips() {
+        let mut cfg = Config::default();
+        cfg.capture.backend = crate::config::schema::CaptureBackend::Kms;
+        let yaml = serde_yaml_ng::to_string(&cfg).expect("serialize");
+        assert!(
+            yaml.contains("backend: kms"),
+            "expected kebab-case kms in yaml, got:\n{yaml}"
+        );
+        let parsed: Config = serde_yaml_ng::from_str(&yaml).expect("deserialize");
+        assert_eq!(
+            parsed.capture.backend,
+            crate::config::schema::CaptureBackend::Kms
+        );
+    }
+
+    #[test]
     fn validate_rejects_time_constant_negative() {
         let mut cfg = Config::default();
         cfg.smoothing.time_constant_ms = -1.0;

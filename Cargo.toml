@@ -26,13 +26,21 @@ ashpd = { version = "0.9", default-features = false, features = ["tokio"], optio
 pipewire = { version = "0.9", optional = true }
 rumqttc = { version = "0.25", optional = true }
 ksni = { version = "0.3", optional = true }
+nix = { version = "0.29", default-features = false, features = ["socket", "uio"], optional = true }
+khronos-egl = { version = "6", features = ["static", "1_5"], optional = true }
+gbm = { version = "0.15", default-features = false, optional = true }
+glow = { version = "0.14", optional = true }
 wayland-client = { version = "0.31", optional = true }
 wayland-protocols = { version = "0.31", features = ["staging", "client"], optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
 
 [features]
-default = ["wayland", "mqtt", "tray"]
+default = ["wayland", "mqtt", "tray", "kms"]
 wayland = ["dep:zbus", "dep:ashpd", "dep:pipewire", "dep:wayland-client", "dep:wayland-protocols", "dep:futures-util"]
+# Low-overhead KMS capture via gpu-screen-recorder's gsr-kms-server helper.
+# nix: SCM_RIGHTS fd passing; khronos-egl + gbm: dma-buf import for readback.
+# Runtime-depends on the gpu-screen-recorder package (optdepend).
+kms = ["dep:nix", "dep:khronos-egl", "dep:gbm", "dep:glow"]
 mqtt = ["dep:rumqttc"]
 tray = ["dep:ksni"]
 # Expose the test fakes (FakeCapture, ...) to integration tests and downstream
@@ -44,6 +52,7 @@ proptest = "1"
 criterion = "0.5"
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [[example]]
 name = "portal_pipewire_smoke"
@@ -52,6 +61,10 @@ required-features = ["wayland"]
 [[example]]
 name = "output_smoke"
 required-features = ["mqtt"]
+
+[[example]]
+name = "kms_probe"
+required-features = ["kms"]
 
 [[bench]]
 name = "zones"

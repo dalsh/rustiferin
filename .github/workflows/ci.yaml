@@ -21,7 +21,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config \
             libpipewire-0.3-dev \
-            libdbus-1-dev
+            libdbus-1-dev \
+            libegl-dev \
+            libgbm-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -33,10 +35,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        run: cargo clippy --all-targets --features wayland,mqtt,tray,test-fakes -- -D warnings
+        run: cargo clippy --all-targets --features wayland,mqtt,tray,kms,test-fakes -- -D warnings
 
       - name: cargo test
-        run: cargo test --features wayland,mqtt,tray,test-fakes
+        run: cargo test --features wayland,mqtt,tray,kms,test-fakes
 
   deny:
     name: cargo-deny

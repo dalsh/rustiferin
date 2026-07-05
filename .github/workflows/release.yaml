@@ -24,14 +24,16 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config \
             libpipewire-0.3-dev \
-            libdbus-1-dev
+            libdbus-1-dev \
+            libegl-dev \
+            libgbm-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release --locked --features wayland,mqtt,tray
+        run: cargo build --release --locked --features wayland,mqtt,tray,kms
 
       - name: Stage release artifacts
         id: stage
