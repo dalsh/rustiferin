@@ -1,6 +1,6 @@
 [package]
 name = "rustiferin"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "Rust-native ambient lighting agent for Glow Worm Luciferin firmware (Plasma Wayland + MQTT only)"
 license = "GPL-3.0-or-later"
