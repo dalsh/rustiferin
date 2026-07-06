@@ -1,7 +1,7 @@
 //! Wire protocol for gpu-screen-recorder's `gsr-kms-server` helper.
 //!
 //! These structs mirror `kms/kms_shared.h` from gpu-screen-recorder **protocol
-//! version 5** (as shipped in gsr 5.13.x) byte-for-byte: the server writes a
+//! version 6** (as shipped in gsr 5.14.x) byte-for-byte: the server writes a
 //! fixed-size `gsr_kms_response` to the socket via `iovec` and passes the
 //! dma-buf fds out-of-band via `SCM_RIGHTS`. The layout is validated against the
 //! real C ABI by the `const` size assertions below (probed on x86_64 with
@@ -11,13 +11,35 @@
 //! `response.version` and fails fast on a mismatch (e.g. after a gsr upgrade),
 //! rather than silently misparsing a changed layout.
 //!
+//! ## Re-deriving this when gsr bumps the protocol
+//!
+//! This is gsr's *internal* contract; it drifts. A gsr upgrade can change both
+//! the version and the struct layout (e.g. the v5 -> v6 bump in gsr 5.14
+//! replaced `is_cursor` bool with a `plane_type` enum, renamed `x/y` to
+//! `src_x/src_y`, and added `dst_*`/`zpos`). When the version check fails:
+//!
+//! 1. `pacman -Q gpu-screen-recorder` for the installed version, then fetch its
+//!    header at that git tag:
+//!    `curl "https://git.dec05eba.com/gpu-screen-recorder/plain/kms/kms_shared.h?h=<version>"`
+//!    (gsr is GPL-3.0, compatible with our license, so mirroring the structs is fine).
+//! 2. Update [`GSR_KMS_PROTOCOL_VERSION`], the `#[repr(C)]` structs, and the
+//!    `const` size assertions below to match the new layout.
+//! 3. Re-verify exact sizes with a C probe compiled against libdrm
+//!    (`gcc p.c $(pkg-config --cflags-only-I libdrm)`) printing `sizeof`/`offsetof`;
+//!    make the assertions match. (v6 on x86_64: request 12, dma_buf 12, item 160,
+//!    response 1424; libdrm's `hdr_output_metadata` is 32 bytes.)
+//! 4. If the handshake changed, update `super::client` against `kms/client/kms_client.c`.
+//! 5. Validate end-to-end with `cargo run --example kms_probe --features kms`
+//!    (it dumps a PNG; check for real, upright pixels). Note the render node is
+//!    NOT `renderD(128+cardN)` - `super::resolve_render_node` matches the PCI device.
+//!
 //! [`gsr_kms_client`]: super::client
 
 use std::os::fd::RawFd;
 
 /// gsr protocol version this client speaks. Must equal the server's, else the
 /// struct layout may differ and we refuse to proceed.
-pub const GSR_KMS_PROTOCOL_VERSION: u32 = 5;
+pub const GSR_KMS_PROTOCOL_VERSION: u32 = 6;
 pub const GSR_KMS_MAX_ITEMS: usize = 8;
 pub const GSR_KMS_MAX_DMA_BUFS: usize = 4;
 
@@ -27,6 +49,9 @@ pub const KMS_REQUEST_TYPE_GET_KMS: i32 = 1;
 
 // gsr_kms_result
 pub const KMS_RESULT_OK: i32 = 0;
+
+// gsr_kms_plane_type (v6 replaced the v5 `is_cursor` bool with this enum).
+pub const KMS_PLANE_TYPE_CURSOR: i32 = 1;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -75,14 +100,22 @@ pub struct KmsResponseItem {
     pub pixel_format: u32,
     pub modifier: u64,
     pub connector_id: u32,
+    /// `gsr_kms_plane_type` enum (v6); compare to [`KMS_PLANE_TYPE_CURSOR`].
+    pub plane_type: i32,
     /// C `bool`; nonzero = true.
-    pub is_cursor: u8,
     pub has_hdr_metadata: u8,
     pub rotation: i32,
-    pub x: i32,
-    pub y: i32,
+    /// Region of the framebuffer that is displayed.
+    pub src_x: i32,
+    pub src_y: i32,
     pub src_w: i32,
     pub src_h: i32,
+    /// Region on the monitor (crtc) where the framebuffer region is displayed.
+    pub dst_x: i32,
+    pub dst_y: i32,
+    pub dst_w: i32,
+    pub dst_h: i32,
+    pub zpos: i32,
     pub hdr_metadata: [u8; 32],
 }
 
@@ -100,8 +133,8 @@ pub struct KmsResponse {
 // A mismatch here means the wire layout drifted and parsing would corrupt.
 const _: () = assert!(std::mem::size_of::<KmsRequest>() == 12);
 const _: () = assert!(std::mem::size_of::<KmsDmaBuf>() == 12);
-const _: () = assert!(std::mem::size_of::<KmsResponseItem>() == 136);
-const _: () = assert!(std::mem::size_of::<KmsResponse>() == 1232);
+const _: () = assert!(std::mem::size_of::<KmsResponseItem>() == 160);
+const _: () = assert!(std::mem::size_of::<KmsResponse>() == 1424);
 
 impl KmsResponse {
     /// A zeroed response, ready to be filled by a socket read.
@@ -128,7 +161,7 @@ impl KmsResponse {
 
 impl KmsResponseItem {
     pub fn is_cursor(&self) -> bool {
-        self.is_cursor != 0
+        self.plane_type == KMS_PLANE_TYPE_CURSOR
     }
 }
 
@@ -203,7 +236,11 @@ mod tests {
         let mut it: KmsResponseItem = unsafe { std::mem::zeroed() };
         it.width = width;
         it.height = height;
-        it.is_cursor = is_cursor as u8;
+        it.plane_type = if is_cursor {
+            KMS_PLANE_TYPE_CURSOR
+        } else {
+            0 // KMS_PLANE_TYPE_PRIMARY
+        };
         it.connector_id = connector;
         it.num_dma_bufs = num_bufs;
         it

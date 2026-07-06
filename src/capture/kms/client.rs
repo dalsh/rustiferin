@@ -116,10 +116,17 @@ impl GsrKmsClient {
             );
         }
         if resp.result != KMS_RESULT_OK {
+            // gsr-kms-server's own err_msg for a version mismatch says "reinstall
+            // gpu-screen-recorder", which is misleading here: it's rustiferin
+            // that speaks the wrong version. Frame it from rustiferin's side.
             bail!(
-                "gsr-kms-server error (result {}): {}",
+                "gsr-kms-server rejected the request (result {}): \"{}\". \
+                 If that mentions a protocol version, gpu-screen-recorder's KMS \
+                 protocol has changed and rustiferin's kms backend (speaks v{}) \
+                 needs updating - reinstalling gpu-screen-recorder will NOT help.",
                 resp.result,
-                resp.err_msg_str()
+                resp.err_msg_str(),
+                GSR_KMS_PROTOCOL_VERSION
             );
         }
         Ok(resp)
